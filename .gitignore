@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Runtime data
+*.db
+.verba/
+
+# Desktop build artifacts
+verba/desktop/src-tauri/target/
+verba/desktop/src-tauri/binaries/
+verba/desktop/src-tauri/gen/
+release/
+
+# OS / editors / Open Design workspace internals
+.DS_Store
+.idea/
+.vscode/
+.file-versions/
+.od-frames/
+.od-skills/
+index.html.artifact.json
+screenshot-*.png
+
+# Local caches
+.pytest_cache/
+.ruff_cache/
