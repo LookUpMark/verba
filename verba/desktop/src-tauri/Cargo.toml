@@ -1,0 +1,19 @@
+[package]
+name = "verba-desktop"
+version = "0.1.0"
+description = "Verba desktop shell - Tauri v2 window + FastAPI sidecar"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["time"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
