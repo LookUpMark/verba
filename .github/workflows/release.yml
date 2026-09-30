@@ -18,7 +18,7 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     outputs:
-      release_id: ${{ steps.create.outputs.release_id }}
+      release_id: ${{ steps.create.outputs.id }}
     steps:
       - uses: actions/checkout@v4
 
