@@ -41,7 +41,7 @@ async def discover(session: Session) -> dict[str, Any]:
                     models = await _probe_ollama(client, probe.base_url)
                 else:
                     models = await _probe_openai(client, probe.base_url)
-            except Exception:
+            except Exception:  # noqa: BLE001 — any probe failure means 'missing'
                 models = []
 
             record = session.get(RuntimeRecord, probe.runtime_id)

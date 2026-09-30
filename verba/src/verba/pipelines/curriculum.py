@@ -75,7 +75,7 @@ def seed_skeleton(session: Session) -> int:
 
 
 def weak_categories(session: Session) -> list[str]:
-    rows = session.exec(select(ErrorRecord).where(ErrorRecord.resolved == False)).all()  # noqa: E712
+    rows = session.exec(select(ErrorRecord).where(ErrorRecord.resolved.is_(False))).all()
     counts: dict[str, int] = {}
     for r in rows:
         counts[r.category] = counts.get(r.category, 0) + 1

@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
 from ..db import get_session
-from ..models import Attempt, DailyStat, ErrorRecord, Node, ProfileEntry, SrsCard
+from ..models import DailyStat, ErrorRecord, Node, ProfileEntry, SrsCard
 from .helpers import completed_ids, profile_get, profile_int
 
 router = APIRouter()

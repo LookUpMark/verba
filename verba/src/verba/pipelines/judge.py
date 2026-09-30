@@ -94,7 +94,7 @@ async def judge_message(session: Session, level: str, tutor_line: str, user_line
         score = max(40, min(100, score))
         if pre and score > 95:
             score = min(score, 100 - 12 * len(pre))
-    except Exception:
+    except Exception:  # noqa: BLE001 — degraded mode is a documented fallback
         # degraded: deterministic pre-pass only (architecture.md §7.3)
         errors = pre
         score = max(40, 100 - 14 * len(errors))

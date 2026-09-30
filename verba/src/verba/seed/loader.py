@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlmodel import Session, select
 
-from ..models import Node, SrsCard
+from ..models import SrsCard
 from ..pipelines.curriculum import seed_skeleton
 from .content import SEED_CARDS
 

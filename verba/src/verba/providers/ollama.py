@@ -41,14 +41,16 @@ class OllamaProvider(LLMProvider):
         }
         if json_schema is not None:
             body["format"] = json_schema
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", f"{self.base_url}/api/chat", json=body) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line.strip():
-                        continue
-                    chunk = json.loads(line)
-                    if chunk.get("done"):
-                        return
-                    if text := chunk.get("message", {}).get("content"):
-                        yield text
+        async with (
+            httpx.AsyncClient(timeout=120.0) as client,
+            client.stream("POST", f"{self.base_url}/api/chat", json=body) as r,
+        ):
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("done"):
+                    return
+                if text := chunk.get("message", {}).get("content"):
+                    yield text

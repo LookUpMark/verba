@@ -9,12 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from ..api.helpers import bump_daily
 from ..db import get_session
 from ..models import SrsCard
 from ..pipelines import generate_structured
 from ..pipelines.prompts import drills_messages
 from ..services.srs import schedule
-from ..api.helpers import bump_daily
 
 router = APIRouter()
 
@@ -22,7 +22,7 @@ router = APIRouter()
 def _due_rows(session: Session) -> list[SrsCard]:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows = session.exec(
-        select(SrsCard).where(SrsCard.retired == False).order_by(SrsCard.due_at)  # noqa: E712
+        select(SrsCard).where(SrsCard.retired.is_(False)).order_by(SrsCard.due_at)
     ).all()
     return [r for r in rows if r.due_at <= now]
 

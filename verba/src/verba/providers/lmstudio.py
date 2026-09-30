@@ -42,15 +42,17 @@ class LMStudioProvider(LLMProvider):
                 "type": "json_schema",
                 "json_schema": {"name": "out", "schema": json_schema},
             }
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream("POST", f"{self.base_url}/chat/completions", json=body) as r:
-                r.raise_for_status()
-                async for line in r.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[len("data: "):]
-                    if payload.strip() == "[DONE]":
-                        return
-                    delta = json.loads(payload)["choices"][0]["delta"]
-                    if chunk := delta.get("content"):
-                        yield chunk
+        async with (
+            httpx.AsyncClient(timeout=120.0) as client,
+            client.stream("POST", f"{self.base_url}/chat/completions", json=body) as r,
+        ):
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                payload = line[len("data: "):]
+                if payload.strip() == "[DONE]":
+                    return
+                delta = json.loads(payload)["choices"][0]["delta"]
+                if chunk := delta.get("content"):
+                    yield chunk

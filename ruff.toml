@@ -1,0 +1,9 @@
+# Ruff config — deterministic across runner versions.
+# B008 ignored: `Depends(...)` in FastAPI parameter defaults is the framework idiom.
+line-length = 120
+
+[lint]
+# Keep ruff's default rule set; B and SIM are explicitly enabled in recent
+# versions — we opt into them deliberately here.
+select = ["E4", "E7", "E9", "F", "B", "SIM"]
+ignore = ["B008"]
