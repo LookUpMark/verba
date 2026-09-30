@@ -101,8 +101,9 @@ fn main() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
-                let state = app.state::<SidecarHandle>();
-                if let Some((child, port)) = state.0.lock().unwrap().take() {
+                // take() first: the MutexGuard temporary must not outlive the if-let
+                let taken = app.state::<SidecarHandle>().0.lock().unwrap().take();
+                if let Some((child, port)) = taken {
                     request_shutdown(port);
                     std::thread::sleep(Duration::from_millis(400));
                     let _ = child.kill();
