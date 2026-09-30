@@ -58,10 +58,11 @@ jobs:
       fail-fast: false
       matrix:
         settings:
+          # macOS arm64 only for v0.1.0: PyInstaller cannot cross-compile the
+          # sidecar, and the hosted runners are arm64. Intel macOS needs a
+          # Rosetta x86_64 sidecar build — planned for v0.2.
           - os: macos-latest
             args: --target aarch64-apple-darwin
-          - os: macos-latest
-            args: --target x86_64-apple-darwin
           - os: windows-latest
             args: ""
           - os: ubuntu-latest
@@ -93,7 +94,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.settings.os == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
