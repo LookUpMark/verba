@@ -1,114 +1,145 @@
-# Verba backend — milestone 1
+# Verba
 
-LLM provider layer, runtime discovery and the Models/Profile endpoints.
-Spec: `architecture.md` (§5 provider layer, §6 endpoints, §4 data model).
-Model selection is **provisional**: no model id is hardcoded — roles resolve
-to whatever the local runtimes actually expose.
+**Local-first AI English learning — 100% on your machine, powered by your own local LLM.**
 
-## Run
+[![CI](https://github.com/LookUpMark/verba/actions/workflows/ci.yml/badge.svg)](https://github.com/LookUpMark/verba/actions/workflows/ci.yml)
+[![Release](https://github.com/LookUpMark/verba/actions/workflows/release.yml/badge.svg)](https://github.com/LookUpMark/verba/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Verba is an open-source desktop app (Tauri v2 + FastAPI sidecar) in the spirit of
+Duolingo: a structured A1→B2 path, six kinds of interactive exercises, a role-play
+tutor that diagnoses every sentence you write, and spaced repetition that turns
+your mistakes into drills. Everything runs on-device against a **local LLM** —
+LM Studio, Ollama or oMLX (Apple Silicon). No cloud, no accounts, no telemetry.
+
+## Features
+
+- **Structured path** — an 11-mission A1→B2 curriculum; each mission generates its
+  exercises lazily with your model, in six kinds: multiple choice, translate,
+  gap fill, word order, listening, speaking.
+- **Tutor with a judge** — role-play scenarios (airport check-in, job interview,
+  restaurant). The tutor streams in character over SSE while a *separate* judge
+  model scores every sentence and flags the classic Italian-speaker calques
+  ("I am agree", "I have 25 years"), with explanations.
+- **Errors become drills** — FSRS-lite scheduling, drill generation from your
+  weakest categories, per-category accuracy and a 14-day activity chart.
+- **Bring your own model** — no model id is ever hardcoded. Runtimes are probed
+  at startup and roles (tutor / judge / generator) auto-assign; override them in
+  the Models screen, assignments persist.
+- **Real desktop app** — Tauri v2 shell with a self-contained PyInstaller sidecar:
+  single-instance, health-checked startup, graceful shutdown, signed update
+  artifacts, and the LLM server opens and closes with the app (oMLX).
+
+## Download & install
+
+Grab the latest release for your platform:
+
+| Platform | Asset |
+|---|---|
+| macOS (Apple Silicon) | `Verba_<ver>_aarch64.dmg` |
+| Windows | `Verba_<ver>_x64-setup.exe` (NSIS) or `Verba_<ver>_x64_en-US.msi` |
+| Linux | `Verba_<ver>_amd64.AppImage` or `Verba_<ver>_amd64.deb` |
+
+> Intel Macs are not built yet (the sidecar needs a Rosetta cross-compile, planned for v0.2).
+
+### First launch on macOS (Gatekeeper)
+
+Verba is currently **ad-hoc signed** — an Apple Developer certificate is not
+configured yet — so Gatekeeper stops the first launch. On macOS Sequoia the old
+right-click → Open bypass is gone; use one of these instead:
+
+1. Try to open Verba once (it will be blocked).
+2. Open **System Settings → Privacy & Security**, scroll to the
+   **"Verba was blocked"** notice and click **Open Anyway** → **Open**.
+
+Or, terminal one-liner after moving the app to `/Applications`:
 
 ```sh
-python3.12 -m venv .venv && source .venv/bin/activate    # or: uv venv
-pip install -e .
-verba                       # = uvicorn verba.main:app --host 127.0.0.1 --port 8000
+xattr -dr com.apple.quarantine /Applications/Verba.app
 ```
 
-Open <http://127.0.0.1:8000/docs>.
+This is one-time per install. Proper codesigning + notarization is planned —
+the release workflow already supports it (set the `MACOS_CERTIFICATE` secrets).
 
-With LM Studio (`:1234`), Ollama (`:11434`) or oMLX (`:8080`, Bearer auth
-read from `~/.omlx/settings.json`) running, `GET /api/runtimes` lists the
-detected models and assigns judge/tutor/generator automatically (largest
-known size → judge, next → tutor, smallest → generator; only Ollama
-reports sizes, so for the OpenAI-compatible runtimes the discovery order
-decides). Override any role with `PUT /api/roles`. If nothing is listening on the MLX port but an oMLX
-install exists, the backend spawns `omlx serve` itself and stops it on
-shutdown (only the server it started — the Osusume pattern).
+## Set up a local runtime (required for the AI features)
 
-## First run — end-to-end verification
+Verba never downloads or hardcodes models — point it at whatever you already run:
+
+| Runtime | You do | Verba does |
+|---|---|---|
+| **oMLX** (PrismML, Apple Silicon) | install once; models under `~/.omlx/models` | spawns `omlx serve` at startup and stops it on quit (only if Verba started it); Bearer auth and port are read from `~/.omlx/settings.json` |
+| **LM Studio** | start the local server (`:1234`) and load a model | probes and lists its models |
+| **Ollama** | `ollama serve`, then `ollama pull qwen3:8b` | probes `:11434` |
+
+Any 7–8B instruct model works well (Qwen3, Gemma, Llama…). Then open the
+**Models** screen → **Rescan runtimes**, check the auto-assigned roles, adjust if
+you like, and start learning. When Verba is running in degraded mode it re-scans
+on its own the moment a runtime shows up (and the Models screen has a manual
+**Rescan runtimes** button).
+
+Without any runtime the app still boots: path, review and stats work on seeded
+content; missions, tutor and drills show guidance until a model is live.
+
+## Verify your setup (first run)
 
 ```sh
-# 1. backend (Python 3.12)
-uv venv && uv pip install -e . && verba     # binds 127.0.0.1:8000
+uv venv && uv pip install -e . && verba          # backend on 127.0.0.1:8000
+curl -s http://127.0.0.1:8000/api/runtimes | python3 -m json.tool   # models + roles
+curl -s http://127.0.0.1:8000/api/path | python3 -m json.tool       # 11 missions A1-B2
+open http://127.0.0.1:8000/                                         # the UI
 
-# 2. LLM runtime: start LM Studio's server, `ollama serve`, or just rely on
-#    the oMLX auto-spawn above, then check detection + roles:
-curl -s http://127.0.0.1:8000/api/runtimes | python3 -m json.tool
-
-# 3. curriculum skeleton (11 missions A1-B2) + the UI on /
-curl -s http://127.0.0.1:8000/api/path | python3 -m json.tool
-open http://127.0.0.1:8000/
-
-# 4. one mission, end to end (tasks are LLM-generated on first open)
+# one mission, end to end (tasks are generated by your model on first open)
 MID=$(curl -s http://127.0.0.1:8000/api/path | python3 -c "import json,sys;print(json.load(sys.stdin)['current'])")
 curl -s -X POST http://127.0.0.1:8000/api/missions/$MID/start | python3 -m json.tool
-#    ... answer the six tasks via POST /api/attempts {task_id, answer, latency_ms}
-#    ... then POST /api/missions/$MID/complete {correct, total}
+#    … grade answers via POST /api/attempts {task_id, answer, latency_ms}
+#    … then POST /api/missions/$MID/complete {correct, total}
 
-# 5. tutor chat (SSE): session, message with classic Italian-speaker errors, stream
+# tutor chat over SSE — the judge should flag both planted errors
 SID=$(curl -s -X POST http://127.0.0.1:8000/api/chat/sessions -H 'Content-Type: application/json' -d '{"scenario":"airport"}' | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
 curl -s -X POST http://127.0.0.1:8000/api/chat/sessions/$SID/messages -H 'Content-Type: application/json' -d '{"text":"I am agree with you, and I have 25 years."}' >/dev/null
 curl -N http://127.0.0.1:8000/api/chat/sessions/$SID/stream
-#    -> token ... message_end, then a diagnosis event flagging "I am agree" and
-#       "I have 25 years"; the errors are recorded (ErrorRecord) and become
-#       SRS drills via POST /api/review/generate or the Review screen button
+#    → token … message_end, then a diagnosis event; errors are recorded and
+#      become drills via POST /api/review/generate (or the Review screen button)
 ```
 
-Every reply from a model passes the JSON-schema + repair pipeline (§5 of
-`architecture.md`); the tutor and judge prompts stay separate by design.
+## Privacy
 
-## Configuration (env vars)
+The API binds to `127.0.0.1` only and validates every request against a
+local-host allowlist (Host header / Origin), responses carry a strict CSP, and
+no learning data ever leaves the machine. The single optional network call is
+the manual **Check for updates** button in the Models screen, which talks to
+this repository's GitHub releases.
 
-| Var | Default |
-|---|---|
-| `VERBA_DB` | `~/.verba/verba.db` |
-| `VERBA_LMSTUDIO_ENDPOINT` | `http://127.0.0.1:1234/v1` |
-| `VERBA_OLLAMA_ENDPOINT` | `http://127.0.0.1:11434` |
-| `VERBA_MLX_ENDPOINT` | `http://127.0.0.1:8080/v1` (mlx-lm serve) |
-| `VERBA_PROBE_TIMEOUT` | `0.8` (seconds) |
+## Development
 
-Nothing leaves localhost. If no runtime answers at startup, the app starts in
-degraded mode and `POST /api/runtimes/scan` re-probes anytime.
-
-## Packaging (desktop app)
-
-One installable per OS: a Tauri v2 window pointing at the FastAPI backend,
-which ships as a single PyInstaller binary (`verba-server`) picked as a
-sidecar. The sidecar picks a free port, prints `VERBA_READY port=<n>` on
-stdout, and the shell opens the window on that port
-(`desktop/src-tauri/src/main.rs`). The Python package is untouched by the shell.
-
-Prerequisites: Rust (stable), Python 3.12, and on Linux
+Prerequisites: Python 3.12 (`uv` recommended), Rust stable; on Linux also
 `libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf`.
 
 ```sh
-# 1. sidecar binary for the current platform
-pip install -e . pyinstaller
-python desktop/build-sidecar.py           # -> desktop/src-tauri/binaries/verba-server-<triple>
+# backend
+uv venv && uv pip install -e . && verba         # docs at /docs
+ruff check src tests && python -m pytest -q     # lint + 29-test contract suite
 
-# 2. app icons (one-time, requires a source PNG)
-cargo tauri icon path/to/app-icon.png     # writes desktop/src-tauri/icons/
-
-# 3. dev window (expects the sidecar already built)
-cargo run                                  # in desktop/src-tauri
-
-# 4. full installers for this OS
-cargo tauri build                          # dmg/app | msi/nsis | deb/appimage
+# desktop shell
+pip install -e . -c constraints.txt pyinstaller
+python desktop/build-sidecar.py                 # → desktop/src-tauri/binaries/
+cd desktop/src-tauri && cargo check --locked    # shell must compile against it
+cargo tauri build                               # installers for this OS
 ```
 
-CI/CD (`.github/workflows/`):
+Layout: `src/verba/` (FastAPI app, providers, pipelines, API), `index.html`
+(the whole UI, wired to the API when served by the backend; falls back to an
+offline demo from `file://`), `desktop/` (Tauri shell + sidecar),
+`.github/workflows/` (CI on 3 OS; release on `v*` tags). The full blueprint —
+provider layer, pipelines, scoring, FSRS, data model — is
+[`architecture.md`](architecture.md).
 
-- **CI** — `ci.yml` on push/PR: `ruff check`, sidecar smoke build, `cargo check`
-  on the three OS matrix rows.
-- **Release** — `release.yml` on tag `v*`: reads the version from
-  `pyproject.toml`, builds sidecar + installers on
-  macOS (arm64; Intel macOS needs a Rosetta sidecar, planned for v0.2),
-  Windows and Linux, attaches dmg/msi/exe/deb/AppImage
-  to a draft GitHub Release, then publishes it. Installers ship signed
-  updater artifacts (`.sig` + `latest.json`) since v0.1.1.
+## Roadmap
 
-Optional secrets: `MACOS_CERTIFICATE` + `MACOS_CERTIFICATE_PWD` +
-`KEYCHAIN_PASSWORD` (codesign/notarize), `TAURI_SIGNING_PRIVATE_KEY` (+password)
-for the updater manifest. Replace `OWNER` in `tauri.conf.json` and generate the
-updater pubkey with `cargo tauri signer generate`. Without them, builds ship
-unsigned and the updater stays off — everything else works.
+See [`architecture.md` §11](architecture.md). Next up (v0.2): whisper.cpp STT
+with pronunciation scoring, Intel Mac sidecar, guided runtime/model setup,
+update flow polish.
 
+## License
+
+[MIT](LICENSE)

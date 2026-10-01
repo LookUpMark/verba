@@ -797,6 +797,7 @@ kbd {
           <p class="sub">Verba runs entirely on your machine. It auto-detects local runtimes at startup and assigns a model to each role.</p>
         </div>
         <button class="btn btn-secondary btn-sm" id="btn-rescan" hidden>Rescan runtimes</button>
+        <button class="btn btn-secondary btn-sm" id="btn-updates" hidden>Check for updates</button>
       </div>
       <div class="runtime-grid" id="runtime-list"></div>
       <div class="card roles-card">
@@ -931,6 +932,7 @@ function save() { if (API.mode) return; try { localStorage.setItem(LS_KEY, JSON.
    every mutation goes through its endpoint. */
 const API = {
   mode: false,
+  degraded: false, // no runtime detected: drives the auto-rescan on focus
   scenarios: [],
   _profile: null,
   _dueQueue: null,
@@ -1280,7 +1282,7 @@ async function regenerateUnit(unit, btn) {
       await API.refreshPath();
       renderPath();
       toast(r.created.length + " new mission" + (r.created.length === 1 ? "" : "s") + " generated for " + unit.level + ".");
-    } catch (e) { toast(API.errText(e)); }
+    } catch (e) { toast(API.errText(e)); apiMaybeModels(e); }
     btn.innerHTML = old;
     return;
   }
@@ -1317,9 +1319,9 @@ async function startLesson(missionId) {
       lesson = { mission: m, tasks: data.tasks.map(API.mapTask), i: 0, correct: 0, done: false, errors: [] };
     } catch (e) {
       toast(API.errText(e));
+      apiMaybeModels(e);
       body.innerHTML = "";
-      renderPath();
-      showScreen("path");
+      if (!(e && e.status === 503)) { renderPath(); showScreen("path"); }
       return;
     }
     renderTask();
@@ -1531,7 +1533,9 @@ function renderTask() {
 
     const note = document.createElement("p");
     note.className = "small";
-    note.textContent = "Prototype check: word recognition only — the real app scores pronunciation with whisper.cpp. Note: Chrome sends your audio to its speech service.";
+    note.textContent = SR
+      ? "Prototype check: word recognition only — pronunciation scoring lands with whisper.cpp. Chrome sends your audio to its speech service."
+      : "Voice recognition isn't available in this webview — type the sentence instead. Real pronunciation scoring lands with whisper.cpp (v0.2).";
 
     if (!SR) {
       mic.disabled = true;
@@ -1927,6 +1931,30 @@ function tutorSay(text, delay) {
     log.scrollTop = log.scrollHeight;
   }, delay || 800);
 }
+/* Degraded mode: a 503 means "no model for this role" — land the user on the
+   Models screen where the rescan and the runtime guide live. */
+function apiMaybeModels(e) {
+  if (API.mode && e && e.status === 503) {
+    renderModels();
+    showScreen("models");
+  }
+}
+let rescanBusy = false;
+async function apiFocusRescan() {
+  if (!API.mode || !API.degraded || rescanBusy || document.hidden) return;
+  rescanBusy = true;
+  try {
+    const data = await API.post("/api/runtimes/scan");
+    if (data.runtimes.some(r => r.status === "detected")) {
+      API.degraded = false;
+      toast("Local runtime detected — AI features are live.");
+      renderModels();
+    }
+  } catch (e) {} // still degraded; the next focus retries
+  finally { rescanBusy = false; }
+}
+window.addEventListener("focus", apiFocusRescan);
+
 function apiStreamSession(chatRef) {
   if (chatRef.es) { try { chatRef.es.close(); } catch (e) {} chatRef.es = null; }
   const es = new EventSource("/api/chat/sessions/" + chatRef.sessionId + "/stream");
@@ -2218,6 +2246,7 @@ async function extraDrills() {
       }
     } catch (e) {
       toast(API.errText(e));
+      apiMaybeModels(e);
       btn.disabled = false;
       btn.innerHTML = icon("spark") + " Generate extra drills";
     }
@@ -2267,7 +2296,10 @@ async function renderModels() {
   root.innerHTML = "";
   let data = null;
   if (API.mode) {
-    try { data = await API.get("/api/runtimes"); } catch (e) { toast(API.errText(e)); }
+    try {
+      data = await API.get("/api/runtimes");
+      API.degraded = data.runtimes.every(r => r.status !== "detected");
+    } catch (e) { toast(API.errText(e)); }
     const dz = document.querySelector(".danger-zone");
     if (dz) dz.style.display = "none";
     const nb = document.querySelector("#screen-models .note-bar p");
@@ -2343,6 +2375,28 @@ $("#btn-rescan").addEventListener("click", async function () {
     toast("Runtimes re-scanned.");
   } catch (e) { toast(API.errText(e)); }
   btn.disabled = false;
+});
+/* In-app update check — only inside the Tauri shell (withGlobalTauri exposes
+   the updater plugin the shell registers; the browser fallback hides the
+   button). This is the app's single user-initiated network call. */
+$("#btn-updates").addEventListener("click", async function () {
+  const btn = $("#btn-updates");
+  btn.disabled = true;
+  try {
+    const update = await window.__TAURI__.updater.check();
+    if (!update) {
+      toast("Verba is up to date.");
+      return;
+    }
+    toast("Downloading update " + update.version + "…");
+    await update.downloadAndInstall();
+    toast("Update installed — restarting…");
+    await window.__TAURI__.process.relaunch();
+  } catch (e) {
+    toast("Update check failed: " + (e && e.message ? e.message : String(e)));
+  } finally {
+    btn.disabled = false;
+  }
 });
 $("#btn-reset-demo").addEventListener("click", () => {
   try { localStorage.removeItem(LS_KEY); } catch (e) {}
@@ -2680,6 +2734,7 @@ document.querySelectorAll(".theme-toggle").forEach(b => b.addEventListener("clic
     API.applyModeBadges();
     $("#chat-finish").hidden = false;
     $("#btn-rescan").hidden = false;
+    if (window.__TAURI__ && window.__TAURI__.updater) $("#btn-updates").hidden = false;
   }
   applyTheme();
   updateStats();

@@ -425,7 +425,7 @@ Milestones in dependency order; each maps to working prototype screens:
 | 5 | SRS (FSRS) + Review endpoints + error→drill loop | ✅ done (v0.1.0) |
 | 6 | Stats endpoints + adaptive path ranking | ✅ done (v0.1.0) |
 | 7 | Voice: whisper.cpp STT on speaking tasks, Piper TTS on listening | 🔜 v0.2 — browser Speech API/speechSynthesis in the meantime |
-| 8 | Intel macOS (x86_64 Rosetta sidecar) + in-app updater check | 🔜 v0.2 — installers ship signed updater artifacts since v0.1.1 |
+| 8 | Intel macOS (x86_64 Rosetta sidecar) + update flow polish | 🔜 v0.2 — updater plugin + in-app "Check for updates" shipped in v0.1.3; installers ship signed artifacts since v0.1.1 |
 
 Also landed after v0.1.0: the prototype UI (index.html) talks to the real API when served by the
 backend same-origin (file:// keeps the offline demo), the PyInstaller sidecar bundles the UI
