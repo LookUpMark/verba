@@ -17,9 +17,10 @@ Open <http://127.0.0.1:8000/docs>.
 
 With LM Studio (`:1234`), Ollama (`:11434`) or oMLX (`:8080`, Bearer auth
 read from `~/.omlx/settings.json`) running, `GET /api/runtimes` lists the
-detected models and assigns judge/tutor/generator automatically (largest →
-judge, next → tutor, smallest → generator). Override any role with
-`PUT /api/roles`. If nothing is listening on the MLX port but an oMLX
+detected models and assigns judge/tutor/generator automatically (largest
+known size → judge, next → tutor, smallest → generator; only Ollama
+reports sizes, so for the OpenAI-compatible runtimes the discovery order
+decides). Override any role with `PUT /api/roles`. If nothing is listening on the MLX port but an oMLX
 install exists, the backend spawns `omlx serve` itself and stops it on
 shutdown (only the server it started — the Osusume pattern).
 
@@ -48,7 +49,8 @@ SID=$(curl -s -X POST http://127.0.0.1:8000/api/chat/sessions -H 'Content-Type: 
 curl -s -X POST http://127.0.0.1:8000/api/chat/sessions/$SID/messages -H 'Content-Type: application/json' -d '{"text":"I am agree with you, and I have 25 years."}' >/dev/null
 curl -N http://127.0.0.1:8000/api/chat/sessions/$SID/stream
 #    -> token ... message_end, then a diagnosis event flagging "I am agree" and
-#       "I have 25 years"; the errors land in /api/review/queue automatically
+#       "I have 25 years"; the errors are recorded (ErrorRecord) and become
+#       SRS drills via POST /api/review/generate or the Review screen button
 ```
 
 Every reply from a model passes the JSON-schema + repair pipeline (§5 of

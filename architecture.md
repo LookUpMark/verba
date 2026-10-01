@@ -21,7 +21,7 @@ error → diagnosis → drill → SRS → adapted curriculum
 Non-negotiable principles:
 
 - **Local-first.** Zero cloud calls in the default configuration. All inference runs through local runtimes (LM Studio, Ollama, MLX, or HF Transformers as fallback).
-- **Structured output or nothing.** Anything an LLM produces that drives logic must validate against a JSON schema. Failed generations are repaired and retried, never shown raw.
+- **Structured output or nothing.** Anything an LLM produces that drives logic must be valid JSON; failed generations are repaired and retried, never shown raw. Task payloads are additionally validated per kind; full JSON-Schema validation of judge/curriculum output is planned for v0.2.
 - **The judge is not the tutor.** Different prompts, different system context, optionally different models. The tutor stays in character; the judge stays analytical.
 - **One profile per machine.** No accounts, no sync, no telemetry. The SQLite file is the user's data.
 
@@ -185,7 +185,7 @@ CREATE TABLE runtimes (
   id       TEXT PRIMARY KEY,     -- 'lmstudio' | 'ollama' | 'mlx' | 'hf'
   endpoint TEXT NOT NULL,
   status   TEXT NOT NULL,        -- 'detected' | 'missing'
-  models   TEXT NOT NULL         -- JSON list [{id, format, size}]
+  models   TEXT NOT NULL         -- JSON list [{id, fmt, size_bytes}]
 );
 CREATE TABLE role_assignments (
   role     TEXT PRIMARY KEY,     -- 'tutor' | 'judge' | 'generator' | 'stt' | 'tts'
@@ -223,13 +223,13 @@ class LLMProvider(Protocol):
 
 The MLX adapter talks to oMLX (the default MLX runtime on macOS installs): it sends the local API key as Bearer auth, disables thinking mode on chat templates (`chat_template_kwargs.enable_thinking=false`, so Qwen-style models don't burn the token budget on invisible reasoning) and strips any leftover `<think>` span from the stream. Transient 404/502/503s from a freshly spawned server are retred with backoff.
 
-**Runtime lifecycle** (oMLX, osusume pattern): at startup the backend probes the MLX endpoint; if nothing answers and a local oMLX install exists (CLI + models), it spawns `omlx serve` detached and refreshes the runtime discovery once the server responds. On shutdown only an app-owned server is killed (SIGTERM to its process group); a server someone else started is left running. No oMLX install means plain degraded mode.
+**Runtime lifecycle** (oMLX, osusume pattern): at startup the backend probes the MLX endpoint; if nothing answers and a local oMLX install exists (CLI + models), it spawns `omlx serve` detached and refreshes the runtime discovery once the server responds. On shutdown only an app-owned server is killed (SIGTERM to its process group, 10 s grace, then SIGKILL + reaping); a server someone else started is left running. No oMLX install means plain degraded mode (opt out of the spawn entirely with `VERBA_LLM_SPAWN=0`).
 
 **Discovery at startup** (mirrors the Models screen):
 
-1. Probe `:1234` (LM Studio / MLX server), then `:11434` (Ollama). One request, 800 ms timeout each.
+1. Probe `:1234` (LM Studio), `:11434` (Ollama) and the oMLX/MLX endpoint (`VERBA_MLX_ENDPOINT`, default `:8080/v1`). 800 ms for the first two, 4 s for oMLX — a busy server answers slowly, and a false miss would invite duplicate spawns.
 2. Detected runtimes are stored in `runtimes`; their models enumerated.
-3. Role assignment: auto-fill `role_assignments` by heuristic (largest available model → judge, next → tutor, smallest → generator), overridable by the user. Roles are resolved lazily per request, so switching a model in the UI takes effect immediately.
+3. Role assignment: auto-fill `role_assignments` by heuristic (largest known size → judge, next → tutor, smallest → generator; only Ollama reports sizes, so for OpenAI-compatible runtimes the discovery order decides), overridable by the user. Roles are resolved lazily per request, so switching a model in the UI takes effect immediately.
 4. If nothing is detected, the app runs degraded: seeded demo curriculum, tutor disabled, download guidance shown with the right format per platform (GGUF for LM Studio/Ollama, MLX 4-bit on Apple Silicon).
 
 **Generation pipeline** (every LLM call that must return JSON):
@@ -237,13 +237,14 @@ The MLX adapter talks to oMLX (the default MLX runtime on macOS installs): it se
 ```
 prompt ──► provider.complete(json_schema=S)
        ──► json.loads
-       ──► pydantic_model.model_validate
-       ├── valid   ──► done
-       └── invalid ──► repair prompt (schema + validation errors) ──► retry (max 2)
-                                                                    └── still invalid → 503 with reason
+       ──► must be a JSON object
+       ├── valid   ──► done (field-level validation happens in the consumer:
+       │                 tasks.validate_payload per kind, judge _norm_error)
+       └── unparsable / not an object ──► repair prompt ──► retry (max 2)
+                                             └── still invalid → 503 with reason
 ```
 
-Never parse LLM output with hope. The repair prompt returns the original JSON plus the validator's error paths; two retries cover virtually all recoverable failures at 7–8B scale.
+Never parse LLM output with hope: an unparsable reply triggers a repair retry, and every downstream consumer validates its fields (task payloads per kind with range/emptiness checks, judge errors normalized and category-clamped). Full JSON-Schema validation of judge/curriculum output is planned for v0.2.
 
 ## 6. API endpoints
 
@@ -255,11 +256,11 @@ All under `http://127.0.0.1:<port>/api`. JSON in/out unless noted. SSE endpoints
 | `POST` | `/shutdown` | graceful stop (called by the shell on quit) | — |
 | `GET` | `/profile` | level, xp, streak, goal, placement (read-only) | Path banner, Stats |
 | `POST` | `/onboarding/placement` | score placement answers → level + initial unlocked set | Onboarding wizard |
-| `POST` | `/onboarding/goal` | set daily goal (XP target) | Onboarding wizard |
+| `POST` | `/onboarding/goal` | set daily goal target (the backend counts completed missions toward it) | Onboarding wizard |
 | `GET` | `/path` | curriculum tree + completion status + current mission | Path |
 | `POST` | `/missions/{id}/start` | get (or lazily generate) the mission's task list | Lesson player |
 | `POST` | `/attempts` | submit a graded task answer → verdict + diagnosis | Lesson player |
-| `POST` | `/missions/{id}/complete` | finalize mission: XP, unlock next, errors → SRS | Mission complete |
+| `POST` | `/missions/{id}/complete` | finalize mission: XP (scored from the recorded attempts), unlock next, errors recorded | Mission complete |
 | `POST` | `/path/units/{id}/generate` | regenerate/extend a unit with the generator model | "Generate with AI" |
 | `GET` | `/chat/scenarios` | available tutor scenarios | Tutor |
 | `POST` | `/chat/sessions` | open a scenario session (persona + level) | Tutor |
@@ -272,6 +273,8 @@ All under `http://127.0.0.1:<port>/api`. JSON in/out unless noted. SSE endpoints
 | `GET` | `/stats/overview` | xp, streak, accuracy, missions, totals | Stats |
 | `GET` | `/stats/daily?days=14` | per-day xp/missions/errors | Stats chart |
 | `GET` | `/stats/errors` | error counts by category | Stats / weak spots |
+| `GET` | `/stats/library` | missions in library, SRS cards total/retired | Stats |
+| `GET` | `/stats/profile-keys` | raw profile key/value pairs | internal |
 | `GET` | `/runtimes` | detected runtimes + models + current role assignment | Models |
 | `POST` | `/runtimes/scan` | re-probe endpoints | Models |
 | `PUT` | `/roles` | assign model per role | Models |
@@ -297,8 +300,8 @@ Generated per node, cached in `nodes`/`tasks`. The generator receives: target CE
 
 ```
 Input  : level=A2, unit="Out & about", profile={tense: 4, word_choice: 2}, known_vocab=[...]
-Output : [{ "title": "Last weekend", "objective": "...", "target_errors": ["tense"] }, ...]
-Schema : CurriculumOut (pydantic) — titles ≤ 40 chars, no duplicate mission titles in unit
+Output : [{ "title": "Last weekend", "objective": "...", "target_categories": ["tense"] }, ...]
+Schema : CURRICULUM_SCHEMA (declared to the model, enforced inline: ≤ 5 missions, titles ≤ 40 chars, no duplicate mission titles in unit)
 ```
 
 Regeneration replaces a node's subtree and bumps `regen_count`; completed missions are never silently deleted.
@@ -357,7 +360,7 @@ Separate prompt, separate model slot, no persona. Input: the last tutor turn, th
 ```
 
 - The prototype's 15+ deterministic rules ("I am agree", "informations", "didn't went", "I have 25 years", "a/an"…) become a **fast pre-pass**: cheap, instant, catches the highest-frequency calques. The LLM judge runs on everything and merges with the pre-pass — deterministic findings filter LLM false positives, LLM findings catch what regex never will.
-- `suggested_drill` seeds SRS directly. `reply_coach` feeds the tutor's next-turn prefix (as in the prototype).
+- `suggested_drill` seeds SRS directly (deduplicated by front, `source='error:llm'`). `reply_coach` is produced (required by the judge schema) but not yet consumed by the tutor — candidate for v0.2.
 - Every error row gets `source='tutor'` and flows into Review + the curriculum's `target_errors`.
 
 ### 7.4 Adaptive path
@@ -408,6 +411,8 @@ repo root (verba)/
 ```
 
 ## 11. Roadmap
+
+Also landed in v0.1.2 (audit fixes): local-only API guard (Host/Origin checks), CSP headers from the sidecar, server-side mission scoring, task uniqueness + partial-set regeneration, judge score floor and drill dedup, oMLX retry deadline and shutdown reaping, updater plugin wired in-app, release dry-run guard + asset verification, Cargo.lock and constraints.txt committed, first pytest suite (29 tests) in CI.
 
 Milestones in dependency order; each maps to working prototype screens:
 

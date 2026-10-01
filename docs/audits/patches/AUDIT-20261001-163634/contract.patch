@@ -1,0 +1,65 @@
+# Patch proposte dall'agente "contract" — deep adversarial audit Verba (AUDIT-20261001-163634)
+# Proposte, MAI applicate. contract-4-1/4-2/4-3/4-4 = MEDIUM, il resto = LOW.
+# Opzione implementativa (creare card SRS dagli errori) preferita come next step,
+# ma la patch qui sotto sceglie il minimo sindacabile: correggere le promesse.
+
+--- a/README.md
++++ b/README.md
+@@ -48,8 +48,8 @@ curl -N http://127.0.0.1:8000/api/chat/sessions/$SID/stream
+-#    -> token ... message_end, then a diagnosis event flagging "I am agree" and
+-#       "I have 25 years"; the errors land in /api/review/queue automatically
++#    -> token ... message_end, then a diagnosis event flagging "I am agree" and
++#       "I have 25 years"; the errors are recorded (ErrorRecord) and become SRS
++#       drills via POST /api/review/generate (or the Review screen button)
+
+--- a/index.html
++++ b/index.html
+@@ -2034,7 +2034,7 @@
+-      ? '<p class="small">Every error above was diagnosed by your local judge — it is already in your Review queue.</p>'
++      ? '<p class="small">Every error above was diagnosed by your local judge — generate the drills from Review ("Generate extra drills") to train on them.</p>'
+
+--- a/architecture.md
++++ b/architecture.md
+@@ -262,7 +262,7 @@
+-| `POST` | `/missions/{id}/complete` | finalize mission: XP, unlock next, errors → SRS | Mission complete |
++| `POST` | `/missions/{id}/complete` | finalize mission: XP, unlock next, errors recorded | Mission complete |
+@@ -258,7 +258,7 @@
+-| `POST` | `/onboarding/goal` | set daily goal (XP target) | Onboarding wizard |
++| `POST` | `/onboarding/goal` | set daily goal target (unit decided per surface: the backend counts completed missions toward it) | Onboarding wizard |
+@@ -230,7 +230,7 @@
+-1. Probe `:1234` (LM Studio / MLX server), then `:11434` (Ollama). One request, 800 ms timeout each.
++1. Probe `:1234` (LM Studio), `:11434` (Ollama) and the oMLX/MLX endpoint (`VERBA_MLX_ENDPOINT`, default `:8080/v1`). 800 ms for the first two, 4 s for oMLX (a busy server answers slowly).
+@@ -232,7 +232,7 @@
+-3. Role assignment: auto-fill `role_assignments` by heuristic (largest available model → judge, next → tutor, smallest → generator), overridable by the user.
++3. Role assignment: auto-fill `role_assignments` by heuristic (largest known size → judge, next → tutor, smallest → generator; only Ollama reports sizes, for unknown-size runtimes the discovery order decides), overridable by the user.
+@@ -189,7 +189,7 @@
+-  models   TEXT NOT NULL         -- JSON list [{id, format, size}]
++  models   TEXT NOT NULL         -- JSON list [{id, fmt, size_bytes}]
+@@ -238,15 +238,15 @@ (pipeline §5 — descrivere la realtà implementata, finding contract-4-3)
+ prompt ──► provider.complete(json_schema=S)
+        ──► json.loads
+-       ──► pydantic_model.model_validate
+-       ├── valid   ──► done
+-       └── invalid ──► repair prompt (schema + validation errors) ──► retry (max 2)
+-                                                                    └── still invalid → 503 with reason
++       ──► must be a JSON object
++       ├── valid   ──► done (field-level validation happens in the consumer:
++       │                 tasks.validate_payload per kind, judge _norm_error)
++       └── unparsable / not an object ──► repair prompt ──► retry (max 2)
++                                             └── still invalid → 503 with reason
+@@ -24,7 +24,7 @@
+-**Structured output or nothing.** Anything an LLM produces that drives logic must validate against a JSON schema. Failed generations are repaired and retried, never shown raw.
++**Structured output or nothing.** Anything an LLM produces that drives logic must be valid JSON; failures are repaired and retried, never shown raw. Task payloads are additionally validated per kind; full JSON-Schema validation of judge/curriculum output is planned for v0.2.
+@@ -300,7 +300,7 @@
+-Output : [{ "title": "Last weekend", "objective": "...", "target_errors": ["tense"] }, ...]
++Output : [{ "title": "Last weekend", "objective": "...", "target_categories": ["tense"] }, ...]
+@@ -301,7 +301,7 @@
+-Schema : CurriculumOut (pydantic) — titles ≤ 40 chars, no duplicate mission titles in unit
++Schema : CURRICULUM_SCHEMA (declared to the model, enforced inline: ≤ 5 missions, titles ≤ 40 chars, no duplicates in unit)
+@@ -360,7 +360,7 @@
+-**Tutor scoring**: judge `score` (0–100), feeding the scenario summary. `suggested_drill` seeds SRS directly. `reply_coach` feeds the tutor's next-turn prefix (as in the prototype).
++**Tutor scoring**: judge `score` (0–100), feeding the scenario summary. `suggested_drill` seeds SRS directly. `reply_coach` is produced (required by the judge schema) but not yet consumed by the tutor — candidate for v0.2.
+@@ (tabella §6 — endpoint mancanti, finding attacker-6)
+ | `GET` | `/stats/errors` | error counts by category | Stats / weak spots |
++| `GET` | `/stats/library` | missions in library, SRS cards total/retired | Stats |
++| `GET` | `/stats/profile-keys` | raw profile key/value pairs | internal |

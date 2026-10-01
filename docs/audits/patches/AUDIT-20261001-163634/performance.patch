@@ -1,0 +1,115 @@
+# Patch proposte dall'agente "performance" — deep adversarial audit Verba (AUDIT-20261001-163634)
+# Proposte, MAI applicate. perf-1/perf-2 = MEDIUM, perf-3/perf-4 = LOW.
+
+--- a/src/verba/providers/mlx.py
++++ b/src/verba/providers/mlx.py
+@@ (costanti)
+ _RETRY_DELAYS = (1.0, 3.0, 7.0, 15.0, 30.0)
++# Total retry budget (finding perf-1): ReadTimeout rides on TransportError and
++# each wait is up to 120s, so the old ladder could stall a single role call for
++# ~13 minutes. A monotonic deadline caps the whole retry sequence.
++_RETRY_DEADLINE_S = 90.0
+@@ complete(...)
+ import asyncio
++import time
+@@
+-        attempt = 0
++        attempt = 0
++        deadline = time.monotonic() + _RETRY_DEADLINE_S
+         while True:
+@@
+-                if transient and attempt < len(_RETRY_DELAYS):
++                if transient and attempt < len(_RETRY_DELAYS) and time.monotonic() < deadline:
+                     await asyncio.sleep(_RETRY_DELAYS[attempt])
+
+--- a/src/verba/services/runtime_lifecycle.py
++++ b/src/verba/services/runtime_lifecycle.py
+@@ shutdown_backend(...)
+     child, logf = owned
+     if hasattr(os, "killpg"):
+         with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
+             os.killpg(os.getpgid(child.pid), signal.SIGTERM)
+     else:  # pragma: no cover — Windows has no process groups
+         child.terminate()
++    # Reap and escalate (finding perf-2): without wait() the SIGTERM'd child
++    # stays a zombie until our own exit, and a server that ignores SIGTERM
++    # would survive holding the port and the GPU memory while the next boot
++    # misreads it as "someone else's server".
++    try:
++        child.wait(timeout=10)
++    except subprocess.TimeoutExpired:
++        with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
++            if hasattr(os, "killpg"):
++                os.killpg(os.getpgid(child.pid), signal.SIGKILL)
++            else:  # pragma: no cover
++                child.kill()
++        with contextlib.suppress(Exception):
++            child.wait(timeout=5)
+     with contextlib.suppress(OSError):
+         logf.close()
+@@ _wait_until_up(...)
+-def _wait_until_up(child: subprocess.Popen[Any], attempts: int = 60, step: float = 2.0) -> bool:
+-    for _ in range(attempts):
++def _wait_until_up(child: subprocess.Popen[Any], budget_s: float = 150.0) -> bool:
++    # Time-based budget (finding perf-4): attempts x (4s probe + 2s step) used
++    # to reach ~6 min. A short probe timeout is enough here — the child was
++    # just spawned, an up server answers immediately.
++    import time
++
++    deadline = time.monotonic() + budget_s
++    while time.monotonic() < deadline:
+         if child.poll() is not None:  # died (port clash, bad config, ...)
+             return False
+-        if _probe_ok():
++        if _probe_ok(timeout=1.0):
+             return True
+         threading.Event().wait(2.0)
+     return False
+@@ _probe_ok(...)
+-def _probe_ok() -> bool:
++def _probe_ok(timeout: float = 4.0) -> bool:
+     try:
+-        r = httpx.get(f"{_mlx_base()}/models", headers=_mlx_headers(), timeout=4.0)
++        r = httpx.get(f"{_mlx_base()}/models", headers=_mlx_headers(), timeout=timeout)
+         return r.status_code < 400  # a 404 here means the server is still warming up
+     except httpx.HTTPError:
+         return False
+
+--- a/src/verba/providers/lmstudio.py
++++ b/src/verba/providers/lmstudio.py
+@@ (top level)
++_CLIENTS: dict[str, httpx.AsyncClient] = {}
++
++
++def _shared_client(base_url: str) -> httpx.AsyncClient:
++    """One pooled client per endpoint (finding perf-3): a fresh client per
++    complete() call pays TCP setup on every tutor turn on the hot path."""
++    client = _CLIENTS.get(base_url)
++    if client is None:
++        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=120.0, write=30.0, pool=10.0))
++        _CLIENTS[base_url] = client
++    return client
++
++
++async def close_clients() -> None:
++    """Called from the app lifespan on shutdown."""
++    for c in _CLIENTS.values():
++        with contextlib.suppress(Exception):
++            await c.aclose()
++    _CLIENTS.clear()
+@@ list_models(...)
+-        async with httpx.AsyncClient(timeout=4.0) as client:
+-            r = await client.get(f"{self.base_url}/models", headers=self.headers)
++        client = _shared_client(self.base_url)
++        r = await client.get(f"{self.base_url}/models", headers=self.headers, timeout=4.0)
+@@ complete(...)
+-        async with (
+-            httpx.AsyncClient(timeout=120.0) as client,
+-            client.stream("POST", f"{self.base_url}/chat/completions", json=body, headers=self.headers) as r,
+-        ):
++        client = _shared_client(self.base_url)
++        async with client.stream("POST", f"{self.base_url}/chat/completions", json=body, headers=self.headers) as r:
+@@ (stessa trasformazione in ollama.py; main.py lifespan teardown aggiunge)
++    from .providers import lmstudio
++
++    await lmstudio.close_clients()

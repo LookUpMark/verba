@@ -1,0 +1,152 @@
+# Patch proposte dall'agente "logic" — deep adversarial audit Verba (AUDIT-20261001-163634)
+# Proposte, MAI applicate. ATT-1..ATT-10, tutte LOW/MEDIUM (vedi report).
+
+--- a/src/verba/pipelines/judge.py
++++ b/src/verba/pipelines/judge.py
+@@ -93,7 +93,7 @@ async def judge_message(...)
+-        score = int(raw.get("score", 100))
++        # Defensive conversion (finding ATT-10): a type deviation on one field
++        # must degrade that field only, not discard the whole LLM diagnosis.
++        score = _to_int(raw.get("score"), 100)
+         score = max(40, min(100, score))
+         if pre and score > 95:
+-            score = min(score, 100 - 12 * len(pre))
++            # Re-apply the floor after the veto (finding ATT-1): with >=6
++            # deterministic findings 100-12*n goes below the 40 clamp.
++            score = max(40, min(score, 100 - 12 * len(pre)))
+@@ -117,9 +119,21 @@ async def judge_message(...)
+     if drill:
+-        session.add(SrsCard(source="seed", front=drill["front"], back=drill["back"], example=drill.get("example")))
++        # Dedup by front (finding ATT-5): the same recurring error would push
++        # an identical card into the review queue on every message. Provenance:
++        # judge drills are LLM-generated, not hand-seeded.
++        dup = session.exec(select(SrsCard).where(SrsCard.front == drill["front"])).first()
++        if dup is None:
++            session.add(SrsCard(source="error:llm", front=drill["front"], back=drill["back"], example=drill.get("example")))
++
++
++def _to_int(value: object, default: int) -> int:
++    try:
++        return int(value)  # type: ignore[arg-type]
++    except (TypeError, ValueError):
++        return default
+@@ (import)
+-from sqlmodel import Session
++from sqlmodel import Session, select
+
+--- a/src/verba/pipelines/tasks.py
++++ b/src/verba/pipelines/tasks.py
+@@ -145,9 +145,25 @@ async def ensure_tasks(session: Session, level: str, mission) -> list[Task]:
+-    rows = session.exec(select(Task).where(Task.mission_id == mission.id).order_by(Task.id)).all()
+-    if rows:
+-        return rows
++    # order_by(Task.id) is a random UUID hex (finding ATT-2): order by the
++    # canonical TASK_KINDS order instead, both for existing and fresh tasks.
++    rows = session.exec(select(Task).where(Task.mission_id == mission.id)).all()
++    if rows:
++        have = {t.kind for t in rows}
++        missing = [k for k in TASK_KINDS if k not in have]
++        if not missing:
++            return sorted(rows, key=lambda t: _kind_rank(t.kind))
++        # Partial set persisted by an older run or a crashed generation
++        # (finding ATT-6): regenerate only the missing kinds instead of
++        # freezing the partial set forever.
++        fresh = await _generate_kinds(session, level, mission, missing)
++        session.add_all(fresh)
++        session.commit()
++        for t in fresh:
++            session.refresh(t)
++        return sorted(list(rows) + fresh, key=lambda t: _kind_rank(t.kind))
+@@ (generazione estratta — il corpo esistente del loop `for _attempt in range(3)` si sposta qui)
++async def _generate_kinds(session: Session, level: str, mission, kinds: list[str]) -> list[Task]:
++    """Generate the requested kinds with the contract prompt + validation + retries."""
++    contract = kind_contract()
++    collected: dict[str, dict] = {}
++    for _attempt in range(3):
++        missing = [k for k in kinds if k not in collected]
++        if not missing:
++            break
++        try:
++            raw = await generate_structured(
++                session, "generator",
++                tasks_messages(level, mission.title, mission.description or mission.title, missing, contract),
++                tasks_schema_for(missing),
++            )
++        except HTTPException:
++            if _attempt == 2:
++                raise
++            continue
++        for item in raw.get("tasks", []):
++            kind = str(item.get("kind", ""))
++            if kind in kinds and kind not in collected:
++                payload = validate_payload(kind, item.get("payload") or {})
++                if payload is not None:
++                    collected[kind] = payload
++    out = [Task(mission_id=mission.id, kind=k, payload=json_dumps(collected[k])) for k in kinds if k in collected]
++    return out
++
++
++def _kind_rank(kind: str) -> int:
++    return TASK_KINDS.index(kind) if kind in TASK_KINDS else len(TASK_KINDS)
+@@ (validate_payload — finding ATT-7: stringhe vuote)
+     if kind == "order" and not isinstance(payload.get("words"), list):
+         return None
++    if kind == "speaking" and not str(payload.get("say") or "").strip():
++        return None
++    if kind in ("translate", "listening"):
++        accepted = payload.get("accepted")
++        if not isinstance(accepted, list) or not any(str(a).strip() for a in accepted):
++            return None
+
+--- a/src/verba/models.py
++++ b/src/verba/models.py
+@@ -37,8 +37,12 @@ class Task(SQLModel, table=True):
+ class Task(SQLModel, table=True):
+     __tablename__ = "tasks"
++    # One task per kind per mission (finding ATT-3, TOCTOU on concurrent
++    # mission starts). NOTE: CREATE TABLE is not altered for existing local
++    # DBs — delete ~/.verba/verba.db (or migrate) to get the constraint.
++    __table_args__ = (UniqueConstraint("mission_id", "kind"),)
+ 
+     id: str = Field(primary_key=True, default_factory=uid)
+@@ (import)
+-from sqlmodel import Field, SQLModel
++from sqlalchemy import UniqueConstraint
++from sqlmodel import Field, SQLModel
+
+--- a/src/verba/pipelines/curriculum.py
++++ b/src/verba/pipelines/curriculum.py
+@@ -100,11 +100,13 @@ async def generate_unit(session: Session, unit: Node) -> list[Node]:
+     existing_titles = {n.title.lower() for n in existing}
++    # Positions must not depend on skipped items (finding ATT-4) and the
++    # schema constraints (max 5, title <=40) are enforced here because
++    # generate_structured does not validate against the schema (finding ATT-9).
++    base = max((n.position for n in existing), default=-1) + 1
+     out: list[Node] = []
+-    for i, m in enumerate(raw.get("missions", [])):
++    for m in raw.get("missions", [])[:5]:
+         title = str(m.get("title", "")).strip()
++        title = title[:40]
+         if not title or title.lower() in existing_titles:
+             continue
+@@ -112,7 +114,7 @@ async def generate_unit(...)
+-            position=len(existing) + i,
++            position=base + len(out),
+
+--- a/src/verba/services/grading.py
++++ b/src/verba/services/grading.py
+@@ -26,8 +26,8 @@ def word_match_ratio(target: str, heard: str) -> float:
+     t, h = _words(target), _words(heard)
+     if not t:
+-        return 1.0
++        # An empty target must not grade everything correct (finding ATT-7).
++        return 0.0
+
+--- a/src/verba/pipelines/rules.py
++++ b/src/verba/pipelines/rules.py
+@@ -16,7 +16,7 @@ RULES = (
+-    (r"\ba\s+([aeiou]\w+)", "a + vowel…", "an + vowel…", "articles", 'Use "an" before a vowel sound.'),
++    # Letter-based rule flagged correct English (finding ATT-8): "a university",
++    # "a user", "a European", "a one-time fee" all start with a vowel LETTER
++    # but a consonant SOUND. Exclude the known /ju/, /w/ onsets.
++    (r"\ba\s+(?!(?:uni|us|eu|one)\w*)([aeiou]\w+)", "a + vowel…", "an + vowel…", "articles", 'Use "an" before a vowel sound.'),

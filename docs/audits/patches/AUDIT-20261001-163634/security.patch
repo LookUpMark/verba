@@ -1,0 +1,138 @@
+# Patch proposte dall'agente "security" — deep adversarial audit Verba (AUDIT-20261001-163634)
+# Proposte, MAI applicate. Ogni sezione è etichettata con l'ID del finding.
+# attacker-1 = HIGH, attacker-2/3/4 = LOW, attacker-5 = INFO.
+
+--- a/src/verba/main.py
++++ b/src/verba/main.py
+@@ -14,9 +14,9 @@
+ from contextlib import asynccontextmanager
+ from pathlib import Path
+ from typing import Any, Literal
+ 
+-from fastapi import Depends, FastAPI, HTTPException
++from fastapi import Depends, FastAPI, HTTPException, Request
+ from fastapi.middleware.cors import CORSMiddleware
+-from fastapi.responses import FileResponse
++from fastapi.responses import FileResponse, JSONResponse
+ from pydantic import BaseModel
+ from sqlmodel import Session, select
+@@ -62,13 +62,39 @@ app = FastAPI(title="Verba", version=__version__, lifespan=lifespan)
+ app.add_middleware(
+     CORSMiddleware,
+-    allow_origins=["http://127.0.0.1", "http://localhost"],  # dev SPA; same-origin under Tauri
++    # Explicit dev ports: browsers always include the port in the Origin header
++    # and Starlette matches origins exactly, so a bare "http://localhost" never
++    # matches a real dev SPA (finding attacker-5). Under Tauri the serving is
++    # same-origin and the Origin guard below is what actually protects /api.
++    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:1420", "http://127.0.0.1:1420"],
+     allow_methods=["*"],
+     allow_headers=["*"],
+ )
+ 
++_LOCAL_HOSTS = {"127.0.0.1", "localhost"}
++
++
++@app.middleware("http")
++async def local_only(request: Request, call_next):
++    """Local-only guard (finding attacker-1, HIGH).
+
++    The API is a localhost service without auth: CORS alone cannot stop a
++    drive-by page because simple cross-origin requests are *sent* regardless
++    (only the response is unreadable). Every cross-origin POST carries an
++    Origin header, and a DNS-rebinding page shows up in the Host header:
++    both are rejected here, so a hostile web page can neither trigger state
++    changes (shutdown, LLM generations) nor read responses.
++    Stronger v0.2 option: shared-secret token passed from the Tauri shell
++    to the sidecar via env and required on every /api request.
++    """
++    host = request.headers.get("host", "").rsplit(":", 1)[0]
++    if host not in _LOCAL_HOSTS:
++        return JSONResponse({"detail": "forbidden host"}, status_code=403)
++    origin = request.headers.get("origin", "")
++    if origin:
++        origin_host = origin.rsplit(":", 1)[0].rsplit("//", 1)[-1]
++        if origin_host not in _LOCAL_HOSTS:
++            return JSONResponse({"detail": "cross-origin requests are not allowed"}, status_code=403)
++    return await call_next(request)
++
+ 
+ for router in (
+     routes_path.router,
+
+--- a/src/verba/api/routes_chat.py
++++ b/src/verba/api/routes_chat.py
+@@ -97,8 +97,10 @@ async def gen() -> AsyncIterator[str]:
+             db.commit()
+-        except Exception as e:  # noqa: BLE001 — stream the failure instead of killing the app
+-            yield _sse("error", {"detail": f"tutor generation failed: {e}"})
++        except Exception as e:  # noqa: BLE001 — stream the failure instead of killing the app
++            # Full detail stays server-side (finding attacker-4): the raw
++            # exception leaks runtime URLs and internal topology to the client.
++            print(f"[verba] tutor generation failed: {e!r}", flush=True)
++            yield _sse("error", {"detail": "tutor generation failed — check your model runtime and rescan from Models."})
+             yield _sse("done", {"status": "error"})
+             return
+
+--- a/src/verba/api/routes_lessons.py
++++ b/src/verba/api/routes_lessons.py
+@@ -80,13 +80,27 @@ def complete_mission(mission_id: str, body: CompleteBody, session: Session = Dep
+     mission = session.get(Node, mission_id)
+     if mission is None or mission.kind != "mission":
+         raise HTTPException(status_code=404, detail="mission not found")
+-    total = max(1, body.total)
+-    acc = max(0, min(100, round(100 * body.correct / total)))
++    # Score from the attempts actually recorded for this mission's tasks
++    # (finding attacker-3): the client body is trusted only as a fallback
++    # when no attempt exists. Negative/inflated values in the body can no
++    # longer forge XP or accuracy.
++    from sqlmodel import select
++
++    task_ids = list(session.exec(select(Task.id).where(Task.mission_id == mission_id)).all())
++    attempts = (
++        list(session.exec(select(Attempt).where(Attempt.task_id.in_(task_ids))).all()) if task_ids else []
++    )
++    total = len(attempts)
++    correct = sum(1 for a in attempts if a.is_correct)
++    if total == 0:
++        total = max(1, body.total)
++        correct = max(0, min(body.correct, total))
++    acc = max(0, min(100, round(100 * correct / total)))
+     gained = 20 + round(acc / 5)
+@@ -94,7 +108,7 @@ def complete_mission(mission_id: str, body: CompleteBody, session: Session = Dep
+-    bump_daily(session, xp=gained, missions=1, errors=total - body.correct)
++    bump_daily(session, xp=gained, missions=1, errors=total - correct)
+
+--- a/desktop/src-tauri/src/main.rs
++++ b/desktop/src-tauri/src/main.rs
+@@ -66,13 +66,15 @@
+-                // stdout prints before uvicorn binds: poll the port (up to 15s)
+-                let port_num: u16 = port.parse().unwrap_or(8000);
++                // stdout prints before uvicorn binds: poll /api/health, not just
++                // the TCP port — any local process can hold a port; only Verba
++                // answers like Verba (finding attacker-2). No silent fallback:
++                // an unparsable port is a hard failure, not 8000.
++                let port_num: u16 = match port.parse() {
++                    Ok(p) => p,
++                    Err(_) => panic!("sidecar reported an invalid port: {port}"),
++                };
+                 for _ in 0..50 {
+-                    if std::net::TcpStream::connect(("127.0.0.1", port_num)).is_ok() {
++                    if health_ok(port_num).await {
+                         break;
+                     }
+                     tokio::time::sleep(Duration::from_millis(300)).await;
+                 }
+@@ (vicino a request_shutdown — nuova helper)
++async fn health_ok(port: u16) -> bool {
++    use tokio::io::{AsyncReadExt, AsyncWriteExt};
++    let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
++        return false;
++    };
++    let req = format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
++    if stream.write_all(req.as_bytes()).await.is_err() {
++        return false;
++    }
++    let mut buf = Vec::new();
++    let _ = stream.read_to_end(&mut buf).await;
++    String::from_utf8_lossy(&buf).contains("\"status\":\"ok\"")
++}

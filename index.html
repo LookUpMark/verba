@@ -2033,7 +2033,7 @@ function showChatSummary(apiFin) {
     '<h3>' + chat.sc.name + " — done</h3>" +
     '<div class="summary-stats"><div class="bstat"><span class="num">' + avg + '</span><span class="lbl">Avg score</span></div>' + cats + "</div>" +
     (API.mode
-      ? '<p class="small">Every error above was diagnosed by your local judge — it is already in your Review queue.</p>'
+      ? '<p class="small">Every error above was diagnosed by your local judge — open Review and "Generate extra drills" to train on them.</p>'
       : '<p class="small">In the real app, the judge runs on your local model and every error here lands in your Review queue.</p>');
   const btn = document.createElement("button");
   btn.className = "btn btn-primary";
@@ -2120,7 +2120,7 @@ async function renderReview() {
       API._dueQueue = API._dueQueue || [];
     }
   }
-  $("#goal-text").textContent = state.goalDone + " / " + state.goalTarget + " cards";
+  $("#goal-text").textContent = state.goalDone + " / " + state.goalTarget + " missions";
   $("#goal-fill").style.width = Math.round((state.goalDone / state.goalTarget) * 100) + "%";
 
   const byCat = {};

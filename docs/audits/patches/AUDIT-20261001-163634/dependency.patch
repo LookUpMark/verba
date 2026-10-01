@@ -1,0 +1,73 @@
+# Patch proposte dall'agente "dependency" — deep adversarial audit Verba (AUDIT-20261001-163634)
+# Proposte, MAI applicate. CSP e lockfile = MEDIUM, licenza = LOW.
+# tauri-plugin-updater mancante (MEDIUM): NESSUNA PATCH — decisione di prodotto
+# già presa dal proprietario (firma/config ora, plugin runtime in v0.2); vedi report.
+# Cargo.lock assente (MEDIUM): azione meccanica, non rappresentabile in patch —
+# `cargo generate-lockfile` in desktop/src-tauri e commit del Cargo.lock.
+
+--- a/src/verba/main.py
++++ b/src/verba/main.py
+@@ (dopo il middleware local_only, nuovo middleware headers)
++@app.middleware("http")
++async def security_headers(request: Request, call_next):
++    """CSP and content-type hardening (finding dependency-1, MEDIUM).
+
++    The webview loads the UI from this HTTP sidecar and Tauri's CSP is null,
++    so this header is the only browser-side mitigation. Inline script/style
++    stays allowed because the UI is one inline file; the point is blocking
++    any exfiltration channel (connect-src 'self') and plugin/base-uri abuse.
++    """
++    response = await call_next(request)
++    response.headers["Content-Security-Policy"] = (
++        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
++        "connect-src 'self'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'"
++    )
++    response.headers["X-Content-Type-Options"] = "nosniff"
++    return response
+
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,8 +1,10 @@
+ [project]
+ name = "verba"
+ version = "0.1.1"
+ description = "Local-first AI language learning — 100% on-device"
++license = "MIT"
+ requires-python = ">=3.12"
+ dependencies = [
+     "fastapi>=0.115",
+     "uvicorn[standard]>=0.30",
+     "sqlmodel>=0.0.22",
+     "httpx>=0.27",
+ ]
+
+--- a/LICENSE (nuovo file)
++++ b/LICENSE
++MIT License
++
++Copyright (c) 2026 Marco Lopez
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+
+--- (finding dependency-2, lockfile riproducibile — proposta operativa, non in patch)
+--- Generare e committare un lock: `uv lock` (commit di uv.lock) oppure
+--- `uv pip compile pyproject.toml -o requirements.lock`; in release.yml
+--- sostituire `pip install -e . "pyinstaller==6.22.3"` con l'install dal lock
+--- (-c constraints.txt come minimo sindacabile). Aggiungere pip-audit/uv audit
+--- come gate della release.
