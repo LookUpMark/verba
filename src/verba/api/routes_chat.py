@@ -46,7 +46,10 @@ def _history(session: Session, session_id: str) -> list[dict]:
     rows = session.exec(
         select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at)
     ).all()
-    return [{"role": m.role, "content": m.content} for m in rows]
+    # system rows are judge metadata, not conversation turns — keep them out
+    # of the tutor's context or the model reads its own diagnosis JSON as
+    # learner speech on the next turn.
+    return [{"role": m.role, "content": m.content} for m in rows if m.role in ("user", "tutor")]
 
 
 def _tutor_target(session: Session) -> tuple[str, str, str] | None:
@@ -83,12 +86,12 @@ async def stream_session(session_id: str, db: Session = Depends(get_session)) ->
         tutor_line = ""
         try:
             runtime = db.get(RuntimeRecord, target[0])
-            provider = provider_for(target[0], runtime.endpoint, target[1])
+            provider = provider_for(target[0], runtime.endpoint, target[2])
             scenario_desc = next((s["description"] for s in SCENARIOS if s["id"] == cs.scenario), cs.scenario)
             messages = tutor_messages(cs.persona, cs.scenario, cs.level, scenario_desc, history)
             if not pending_user:
                 messages.append({"role": "user", "content": "(Start the conversation in character.)"})
-            async for chunk in provider.complete(messages, model=target[1], temperature=0.8, max_tokens=160):
+            async for chunk in provider.complete(messages, model=target[2], temperature=0.8, max_tokens=160):
                 tutor_line += chunk
                 yield _sse("token", {"delta": chunk})
             yield _sse("message_end", {})
@@ -101,7 +104,8 @@ async def stream_session(session_id: str, db: Session = Depends(get_session)) ->
 
         if pending_user:
             diagnosis = await judge_message(db, cs.level, tutor_line, history[-1]["content"], source="tutor")
-            db.add(ChatMessage(session_id=session_id, role="system", content=json.dumps(diagnosis)))
+            payload = json.dumps(diagnosis)
+            db.add(ChatMessage(session_id=session_id, role="system", content=payload, diagnosis=payload))
             db.commit()
             yield _sse("diagnosis", diagnosis)
 

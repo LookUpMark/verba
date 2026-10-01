@@ -20,8 +20,11 @@ titles at most 40 characters, no duplicates."""
 
 TASKS_SYSTEM = """You write English exercises for a structured learning app.
 Produce exactly the requested number of tasks, one per kind, in order.
-Each task must be valid for its kind's schema. Correct English only;
-explanations are one short sentence; distractors must be plausible."""
+Each payload MUST use exactly the field names listed for its kind — no other
+field names, no renames. Correct English only; explanations are one short
+sentence; distractors must be plausible.
+Example of the required shape (mc kind):
+{"tasks": [{"kind": "mc", "payload": {"prompt": "Pick the right form: She ___ a doctor.", "choices": ["is", "are", "be"], "answer": 0, "why": "Third person singular takes 'is'."}}]}"""
 
 
 def tutor_messages(persona: str, role: str, level: str, scenario: str, history: list[dict]) -> list[dict]:
@@ -58,14 +61,15 @@ def curriculum_messages(level: str, unit_title: str, weak: list[str], known: lis
     ]
 
 
-def tasks_messages(level: str, mission_title: str, objective: str, kinds: list[str]) -> list[dict]:
+def tasks_messages(level: str, mission_title: str, objective: str, kinds: list[str], contract: str = "") -> list[dict]:
     return [
         {"role": "system", "content": TASKS_SYSTEM},
         {
             "role": "user",
             "content": (
                 f"Level: {level}\nMission: {mission_title}\nObjective: {objective}\n"
-                f"Produce {len(kinds)} tasks with kinds in this order: {', '.join(kinds)}."
+                f"Produce {len(kinds)} tasks with kinds in this order: {', '.join(kinds)}.\n"
+                f"Payload field contract per kind:\n{contract}"
             ),
         },
     ]

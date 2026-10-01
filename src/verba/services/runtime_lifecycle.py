@@ -51,7 +51,7 @@ def _mlx_headers() -> dict[str, str] | None:
 def _probe_ok() -> bool:
     try:
         r = httpx.get(f"{_mlx_base()}/models", headers=_mlx_headers(), timeout=4.0)
-        return r.status_code < 500
+        return r.status_code < 400  # a 404 here means the server is still warming up
     except httpx.HTTPError:
         return False
 

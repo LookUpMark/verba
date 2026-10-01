@@ -9,7 +9,10 @@ API, so the wire format matches LM Studio. Differences handled here:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
+
+import httpx
 
 from ..config import settings
 from .base import Message, ModelInfo
@@ -17,6 +20,11 @@ from .lmstudio import LMStudioProvider
 
 _OPEN = "<think>"
 _CLOSE = "</think>"
+
+# A freshly spawned oMLX server serves /v1/models before its chat routes come
+# up (~404 for a while on a cold model scan). Retry briefly instead of failing
+# the very first tutor/judge/generator call of a session.
+_RETRY_DELAYS = (1.0, 3.0, 7.0, 15.0, 30.0)
 
 
 def _partial_tag_suffix(text: str, tag: str) -> int:
@@ -82,8 +90,26 @@ class MLXProvider(LMStudioProvider):
         max_tokens: int = 1024,
     ) -> AsyncIterator[str]:
         stripper = _ThinkStripper()
-        async for chunk in super().complete(
-            messages, model=model, json_schema=json_schema, temperature=temperature, max_tokens=max_tokens
-        ):
-            if cleaned := stripper.feed(chunk):
+        attempt = 0
+        while True:
+            gen = super().complete(
+                messages, model=model, json_schema=json_schema, temperature=temperature, max_tokens=max_tokens
+            )
+            try:
+                first = await gen.__anext__()
+            except StopAsyncIteration:
+                return
+            except (httpx.HTTPStatusError, httpx.TransportError) as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                transient = status in (404, 502, 503) or isinstance(e, httpx.TransportError)
+                if transient and attempt < len(_RETRY_DELAYS):
+                    await asyncio.sleep(_RETRY_DELAYS[attempt])
+                    attempt += 1
+                    continue
+                raise
+            if cleaned := stripper.feed(first):
                 yield cleaned
+            async for chunk in gen:
+                if cleaned := stripper.feed(chunk):
+                    yield cleaned
+            return
