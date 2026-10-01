@@ -7,6 +7,7 @@ boots and `POST /api/runtimes/scan` re-probes anytime (architecture.md §5).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -17,14 +18,16 @@ from ..models import RuntimeRecord
 from .base import ModelInfo
 
 
-async def _probe_openai(client: httpx.AsyncClient, base_url: str) -> list[ModelInfo]:
-    r = await client.get(f"{base_url.rstrip('/')}/models")
+async def _probe_openai(
+    client: httpx.AsyncClient, base_url: str, headers: dict[str, str] | None, timeout: float
+) -> list[ModelInfo]:
+    r = await client.get(f"{base_url.rstrip('/')}/models", headers=headers, timeout=timeout)
     r.raise_for_status()
     return [ModelInfo(id=m["id"]) for m in r.json().get("data", [])]
 
 
-async def _probe_ollama(client: httpx.AsyncClient, base_url: str) -> list[ModelInfo]:
-    r = await client.get(f"{base_url.rstrip('/')}/api/tags")
+async def _probe_ollama(client: httpx.AsyncClient, base_url: str, timeout: float) -> list[ModelInfo]:
+    r = await client.get(f"{base_url.rstrip('/')}/api/tags", timeout=timeout)
     r.raise_for_status()
     return [
         ModelInfo(id=m["name"], fmt="gguf", size_bytes=int(m.get("size", 0)))
@@ -36,13 +39,17 @@ async def discover(session: Session) -> dict[str, Any]:
     results: dict[str, Any] = {}
     async with httpx.AsyncClient(timeout=settings.probe_timeout_s) as client:
         for probe in settings.probes:
+            timeout = probe.timeout_s if probe.timeout_s is not None else settings.probe_timeout_s
             try:
                 if probe.runtime_id == "ollama":
-                    models = await _probe_ollama(client, probe.base_url)
+                    models = await _probe_ollama(client, probe.base_url, timeout)
                 else:
-                    models = await _probe_openai(client, probe.base_url)
+                    models = await _probe_openai(client, probe.base_url, probe.headers, timeout)
             except Exception:  # noqa: BLE001 — any probe failure means 'missing'
                 models = []
+
+            if probe.runtime_id == "mlx":
+                models = [replace(m, fmt="mlx") for m in models]
 
             record = session.get(RuntimeRecord, probe.runtime_id)
             if record is None:
