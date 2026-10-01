@@ -12,10 +12,11 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -52,6 +53,9 @@ async def lifespan(app: FastAPI):
     runtime_lifecycle.ensure_llm_server()
     yield
     runtime_lifecycle.shutdown_backend()
+    from .providers import lmstudio
+
+    await lmstudio.close_clients()
 
 
 # uvicorn owns the signal handlers, so SIGTERM skips exit hooks — atexit is
@@ -62,10 +66,54 @@ atexit.register(runtime_lifecycle.shutdown_backend)
 app = FastAPI(title="Verba", version=__version__, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1", "http://localhost"],  # dev SPA; same-origin under Tauri
+    # Explicit dev ports: browsers always include the port in the Origin header
+    # and Starlette matches origins exactly, so a bare "http://localhost" never
+    # matches a real dev SPA. Under Tauri the serving is same-origin; the Origin
+    # guard below is what actually protects /api from hostile web pages.
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:1420", "http://127.0.0.1:1420"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_LOCAL_HOSTS = {"127.0.0.1", "localhost"}
+
+
+@app.middleware("http")
+async def local_only(request: Request, call_next):
+    """Local-only guard. The API is a localhost service without auth: CORS
+    alone cannot stop a drive-by page, because simple cross-origin requests
+    are *sent* regardless (only the response is unreadable). Every
+    cross-origin POST carries an Origin header, and a DNS-rebinding page
+    shows up in the Host header — both are rejected here, so a hostile web
+    page can neither trigger state changes (shutdown, LLM generations) nor
+    read responses. Stronger v0.2 option: shared-secret token passed from
+    the Tauri shell to the sidecar via env and required on every /api call.
+    """
+    host = request.headers.get("host", "").rsplit(":", 1)[0]
+    if host not in _LOCAL_HOSTS:
+        return JSONResponse({"detail": "forbidden host"}, status_code=403)
+    origin = request.headers.get("origin", "")
+    if origin:
+        origin_host = urlparse(origin).hostname or ""
+        if origin_host not in _LOCAL_HOSTS:
+            return JSONResponse({"detail": "cross-origin requests are not allowed"}, status_code=403)
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """CSP and content-type hardening. The webview loads the UI from this
+    HTTP sidecar and Tauri's CSP is null, so this header is the only
+    browser-side mitigation. Inline script/style stays allowed because the
+    UI is one inline file; the point is blocking exfiltration channels
+    (connect-src 'self') and plugin/base-uri abuse."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 for router in (
     routes_path.router,

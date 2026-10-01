@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from ..models import ErrorRecord, SrsCard
 from . import generate_structured
@@ -60,6 +60,24 @@ def _norm_error(e: dict) -> dict | None:
     return {"category": category, "wrong": wrong, "right": right, "explanation": explanation, "severity": severity}
 
 
+def _to_int(value: object, default: int) -> int:
+    """Defensive conversion: a type deviation on one field degrades that field
+    only, never the whole diagnosis."""
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def final_score(llm_score: object, n_pre: int) -> int:
+    """Clamp the LLM score, then apply the deterministic-findings veto —
+    re-clamping to the 40 floor, which the veto alone can go below."""
+    score = max(40, min(100, _to_int(llm_score, 100)))
+    if n_pre and score > 95:
+        score = max(40, min(score, 100 - 12 * n_pre))
+    return score
+
+
 def _merge(pre: list[dict], llm: list[dict]) -> list[dict]:
     """Union, deduped on normalized `wrong`; deterministic findings win."""
     out: list[dict] = list(pre)
@@ -90,10 +108,7 @@ async def judge_message(session: Session, level: str, tutor_line: str, user_line
         # deterministic findings veto LLM claims about the same span
         llm_errors = _merge([], llm_errors)
         errors = _merge(pre, llm_errors)
-        score = int(raw.get("score", 100))
-        score = max(40, min(100, score))
-        if pre and score > 95:
-            score = min(score, 100 - 12 * len(pre))
+        score = final_score(raw.get("score"), len(pre))
     except Exception:  # noqa: BLE001 — degraded mode is a documented fallback
         # degraded: deterministic pre-pass only (architecture.md §7.3)
         errors = pre
@@ -115,6 +130,11 @@ async def judge_message(session: Session, level: str, tutor_line: str, user_line
             )
         )
     if drill:
-        session.add(SrsCard(source="seed", front=drill["front"], back=drill["back"], example=drill.get("example")))
+        # Dedup by front (the same recurring error would otherwise push an
+        # identical card into the queue on every message) and keep provenance
+        # honest: judge drills are LLM-generated, not hand-seeded.
+        dup = session.exec(select(SrsCard).where(SrsCard.front == drill["front"])).first()
+        if dup is None:
+            session.add(SrsCard(source="error:llm", front=drill["front"], back=drill["back"], example=drill.get("example")))
     session.commit()
     return diagnosis

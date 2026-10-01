@@ -98,7 +98,10 @@ async def stream_session(session_id: str, db: Session = Depends(get_session)) ->
             db.add(ChatMessage(session_id=session_id, role="tutor", content=tutor_line))
             db.commit()
         except Exception as e:  # noqa: BLE001 — stream the failure instead of killing the app
-            yield _sse("error", {"detail": f"tutor generation failed: {e}"})
+            # Full detail stays server-side: the raw exception leaks runtime
+            # URLs and internal topology to the client.
+            print(f"[verba] tutor generation failed: {e!r}", flush=True)
+            yield _sse("error", {"detail": "tutor generation failed — check your model runtime and rescan from Models."})
             yield _sse("done", {"status": "error"})
             return
 

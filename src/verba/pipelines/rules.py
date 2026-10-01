@@ -13,7 +13,10 @@ RULES: tuple[tuple[str, str, str, str, str], ...] = (
     (r"\bi\s+am\s+agree\b", "I am agree", "I agree", "grammar", '"Agree" is already a verb — no "am".'),
     (r"\binformations\b", "informations", "information", "word_choice", '"Information" is uncountable — never plural.'),
     (r"\bi\s+have\s+(\d+|twenty[- ]?five|thirty|forty)\s+years?\b", "I have … years", "I am … years old", "grammar", "Age uses 'to be', not 'to have' (calque from Italian)."),
-    (r"\ba\s+([aeiou]\w+)", "a + vowel…", "an + vowel…", "articles", 'Use "an" before a vowel sound.'),
+    # Letter-based check would flag correct English ("a university", "a user",
+    # "a European", "a one-time fee" start with a vowel letter but a
+    # consonant sound), so exclude the known /ju/ and /w/ onsets.
+    (r"\ba\s+(?!(?:uni|us|eu|one)\w*)([aeiou]\w+)", "a + vowel…", "an + vowel…", "articles", 'Use "an" before a vowel sound.'),
     (r"\bpeoples\b", "peoples", "people", "word_choice", '"People" is already plural.'),
     (r"\bdidn'?t\s+went\b", "didn't went", "didn't go", "tense", "After 'did/didn't' the verb goes back to base form."),
     (r"\bmore\s+better\b", "more better", "better", "grammar", '"Better" is already comparative.'),

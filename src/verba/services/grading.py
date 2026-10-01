@@ -26,7 +26,8 @@ def _words(s: str) -> list[str]:
 def word_match_ratio(target: str, heard: str) -> float:
     t, h = _words(target), _words(heard)
     if not t:
-        return 1.0
+        # An empty target must not grade everything correct.
+        return 0.0
     pool = h.copy()
     matched = 0
     for w in t:

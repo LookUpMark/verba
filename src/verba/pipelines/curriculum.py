@@ -98,9 +98,14 @@ async def generate_unit(session: Session, unit: Node) -> list[Node]:
         CURRICULUM_SCHEMA,
     )
     existing_titles = {n.title.lower() for n in existing}
+    # Positions must not depend on skipped items (duplicate/empty titles), so
+    # the base comes from the highest existing position and grows with `out`.
+    base = max((n.position for n in existing), default=-1) + 1
     out: list[Node] = []
-    for i, m in enumerate(raw.get("missions", [])):
-        title = str(m.get("title", "")).strip()
+    # The schema constraints are enforced here: generate_structured validates
+    # only that the reply parses as a JSON object, so the model can overshoot.
+    for m in raw.get("missions", [])[:5]:
+        title = str(m.get("title", "")).strip()[:40]
         if not title or title.lower() in existing_titles:
             continue
         node = Node(
@@ -110,7 +115,7 @@ async def generate_unit(session: Session, unit: Node) -> list[Node]:
             title=title,
             description=str(m.get("objective", "")),
             parent_id=unit.id,
-            position=len(existing) + i,
+            position=base + len(out),
             generated=True,
         )
         session.add(node)

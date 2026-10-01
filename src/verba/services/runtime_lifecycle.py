@@ -48,9 +48,9 @@ def _mlx_headers() -> dict[str, str] | None:
     return _mlx_probe().headers
 
 
-def _probe_ok() -> bool:
+def _probe_ok(timeout: float = 4.0) -> bool:
     try:
-        r = httpx.get(f"{_mlx_base()}/models", headers=_mlx_headers(), timeout=4.0)
+        r = httpx.get(f"{_mlx_base()}/models", headers=_mlx_headers(), timeout=timeout)
         return r.status_code < 400  # a 404 here means the server is still warming up
     except httpx.HTTPError:
         return False
@@ -84,13 +84,19 @@ def _spawn_omlx() -> tuple[subprocess.Popen[Any], Any]:
     return child, logf
 
 
-def _wait_until_up(child: subprocess.Popen[Any], attempts: int = 60, step: float = 2.0) -> bool:
-    for _ in range(attempts):
+def _wait_until_up(child: subprocess.Popen[Any], budget_s: float = 150.0) -> bool:
+    # Time-based budget: the old attempts×step ladder multiplied by the
+    # generous 4s probe timeout could reach ~6 minutes. A short probe timeout
+    # is enough here — the child was just spawned, an up server answers fast.
+    import time
+
+    deadline = time.monotonic() + budget_s
+    while time.monotonic() < deadline:
         if child.poll() is not None:  # died (port clash, bad config, ...)
             return False
-        if _probe_ok():
+        if _probe_ok(timeout=1.0):
             return True
-        threading.Event().wait(step)
+        threading.Event().wait(2.0)
     return False
 
 
@@ -114,6 +120,9 @@ def _worker() -> None:
         if _state != "off":
             return
         _state = "starting"
+    if os.environ.get("VERBA_LLM_SPAWN", "1") == "0":  # hermetic tests / explicit opt-out
+        _state = "off"
+        return
     try:
         if _probe_ok():
             _state = "up"  # someone else's server — use it, never kill it
@@ -153,5 +162,18 @@ def shutdown_backend() -> None:
             os.killpg(os.getpgid(child.pid), signal.SIGTERM)
     else:  # pragma: no cover — Windows has no process groups
         child.terminate()
+    # Reap and escalate: without wait() the SIGTERM'd child stays a zombie
+    # until our own exit, and a server slow to die would survive holding the
+    # port and the GPU memory while the next boot misreads it as foreign.
+    try:
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
+            if hasattr(os, "killpg"):
+                os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+            else:  # pragma: no cover
+                child.kill()
+        with contextlib.suppress(Exception):
+            child.wait(timeout=5)
     with contextlib.suppress(OSError):
         logf.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -36,6 +37,11 @@ class Node(SQLModel, table=True):
 
 class Task(SQLModel, table=True):
     __tablename__ = "tasks"
+    # One task per kind per mission: concurrent first opens of the same
+    # mission must not duplicate tasks (the loser of the race re-reads).
+    # Fresh DBs get this from CREATE TABLE; existing DBs get the equivalent
+    # unique index from init_db.
+    __table_args__ = (UniqueConstraint("mission_id", "kind"),)
 
     id: str = Field(primary_key=True, default_factory=uid)
     mission_id: str = Field(foreign_key="nodes.id", index=True)

@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 
-import httpx
 
 from .base import LLMProvider, Message, ModelInfo
+from .lmstudio import _shared_client
 
 
 class OllamaProvider(LLMProvider):
@@ -16,13 +16,13 @@ class OllamaProvider(LLMProvider):
         self.model_id = model_id
 
     async def list_models(self) -> list[ModelInfo]:
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            r = await client.get(f"{self.base_url}/api/tags")
-            r.raise_for_status()
-            return [
-                ModelInfo(id=m["name"], runtime="ollama", fmt="gguf", size_bytes=int(m.get("size", 0)))
-                for m in r.json().get("models", [])
-            ]
+        client = _shared_client(self.base_url)
+        r = await client.get(f"{self.base_url}/api/tags", timeout=2.0)
+        r.raise_for_status()
+        return [
+            ModelInfo(id=m["name"], runtime="ollama", fmt="gguf", size_bytes=int(m.get("size", 0)))
+            for m in r.json().get("models", [])
+        ]
 
     async def complete(
         self,
@@ -41,10 +41,8 @@ class OllamaProvider(LLMProvider):
         }
         if json_schema is not None:
             body["format"] = json_schema
-        async with (
-            httpx.AsyncClient(timeout=120.0) as client,
-            client.stream("POST", f"{self.base_url}/api/chat", json=body) as r,
-        ):
+        client = _shared_client(self.base_url)
+        async with client.stream("POST", f"{self.base_url}/api/chat", json=body) as r:
             r.raise_for_status()
             async for line in r.aiter_lines():
                 if not line.strip():

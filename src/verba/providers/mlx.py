@@ -10,6 +10,7 @@ API, so the wire format matches LM Studio. Differences handled here:
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 import httpx
@@ -23,8 +24,11 @@ _CLOSE = "</think>"
 
 # A freshly spawned oMLX server serves /v1/models before its chat routes come
 # up (~404 for a while on a cold model scan). Retry briefly instead of failing
-# the very first tutor/judge/generator call of a session.
+# the very first tutor/judge/generator call of a session. ReadTimeout rides on
+# TransportError and each attempt can already wait up to 120s, so the whole
+# sequence is capped by a monotonic deadline instead of the delay ladder alone.
 _RETRY_DELAYS = (1.0, 3.0, 7.0, 15.0, 30.0)
+_RETRY_DEADLINE_S = 90.0
 
 
 def _partial_tag_suffix(text: str, tag: str) -> int:
@@ -91,6 +95,7 @@ class MLXProvider(LMStudioProvider):
     ) -> AsyncIterator[str]:
         stripper = _ThinkStripper()
         attempt = 0
+        deadline = time.monotonic() + _RETRY_DEADLINE_S
         while True:
             gen = super().complete(
                 messages, model=model, json_schema=json_schema, temperature=temperature, max_tokens=max_tokens
@@ -102,7 +107,7 @@ class MLXProvider(LMStudioProvider):
             except (httpx.HTTPStatusError, httpx.TransportError) as e:
                 status = getattr(getattr(e, "response", None), "status_code", None)
                 transient = status in (404, 502, 503) or isinstance(e, httpx.TransportError)
-                if transient and attempt < len(_RETRY_DELAYS):
+                if transient and attempt < len(_RETRY_DELAYS) and time.monotonic() < deadline:
                     await asyncio.sleep(_RETRY_DELAYS[attempt])
                     attempt += 1
                     continue

@@ -1,0 +1,3 @@
+# Tested versions at release v0.1.2 (pip install -c constraints.txt in CI).
+# Refresh deliberately, together with a green CI run.
+pyinstaller==6.22.3

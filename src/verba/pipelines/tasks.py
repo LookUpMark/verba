@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ..models import Task
@@ -134,24 +135,39 @@ def validate_payload(kind: str, payload: dict) -> dict | None:
         return None
     if kind in ("translate", "listening") and not isinstance(payload.get("accepted"), list):
         return None
+    # Empty text fields must not reach grading: an empty speaking target
+    # would grade every answer correct (word_match_ratio on "").
+    if kind == "speaking" and not str(payload.get("say") or "").strip():
+        return None
+    if kind in ("translate", "listening"):
+        accepted = payload.get("accepted")
+        if not accepted or not any(str(a).strip() for a in accepted):
+            return None
     return payload
 
 
-async def ensure_tasks(session: Session, level: str, mission) -> list[Task]:
-    """Return the mission's tasks, generating them on first open (§7.2).
+def _kind_rank(kind: str) -> int:
+    """Canonical prototype order: mc, translate, gap, order, listening, speaking.
+
+    Task.id is a random UUID hex, so it must never be used for ordering."""
+    return TASK_KINDS.index(kind) if kind in TASK_KINDS else len(TASK_KINDS)
+
+
+def _sorted_tasks(rows: list[Task]) -> list[Task]:
+    return sorted(rows, key=lambda t: _kind_rank(t.kind))
+
+
+async def _generate_kinds(session: Session, level: str, mission, kinds: list[str]) -> list[Task]:
+    """Generate the requested kinds with the contract prompt + validation.
 
     Small local models sometimes rename payload fields or fumble a kind, so
-    the generation repeats for the missing kinds only (payload field names
-    are stated in the prompt; validation stays the judge of truth).
+    the generation repeats for the still-missing kinds only (payload field
+    names are stated in the prompt; validation stays the judge of truth).
     """
-    rows = session.exec(select(Task).where(Task.mission_id == mission.id).order_by(Task.id)).all()
-    if rows:
-        return rows
-
     contract = kind_contract()
     collected: dict[str, dict] = {}
-    for _attempt in range(3):  # 1 full pass + 2 make-up rounds for missing kinds
-        missing = [k for k in TASK_KINDS if k not in collected]
+    for _attempt in range(3):  # 1 full pass + 2 make-up rounds
+        missing = [k for k in kinds if k not in collected]
         if not missing:
             break
         try:
@@ -167,21 +183,52 @@ async def ensure_tasks(session: Session, level: str, mission) -> list[Task]:
             continue
         for item in raw.get("tasks", []):
             kind = str(item.get("kind", ""))
-            if kind not in TASK_KINDS or kind in collected:
-                continue
-            payload = validate_payload(kind, item.get("payload") or {})
-            if payload is not None:
-                collected[kind] = payload
+            if kind in kinds and kind not in collected:
+                payload = validate_payload(kind, item.get("payload") or {})
+                if payload is not None:
+                    collected[kind] = payload
+    return [Task(mission_id=mission.id, kind=k, payload=json_dumps(collected[k])) for k in kinds if k in collected]
 
-    if not collected:
+
+async def ensure_tasks(session: Session, level: str, mission) -> list[Task]:
+    """Return the mission's tasks, generating them on first open (§7.2).
+
+    A partial set from an older run or a crashed generation is completed on
+    the next open: the missing kinds are regenerated instead of being frozen
+    away forever. Concurrent first opens are arbitrated by the unique index
+    on (mission_id, kind); the loser re-reads instead of duplicating.
+    """
+    rows = session.exec(select(Task).where(Task.mission_id == mission.id)).all()
+    if rows:
+        have = {t.kind for t in rows}
+        missing = [k for k in TASK_KINDS if k not in have]
+        if not missing:
+            return _sorted_tasks(rows)
+        fresh = await _generate_kinds(session, level, mission, missing)
+        return await _persist_tasks(session, mission.id, rows, fresh)
+
+    fresh = await _generate_kinds(session, level, mission, list(TASK_KINDS))
+    if not fresh:
         raise HTTPException(status_code=503, detail="model produced no valid tasks; retry mission start")
-    out = [Task(mission_id=mission.id, kind=k, payload=json_dumps(collected[k])) for k in TASK_KINDS if k in collected]
-    for t in out:
+    return await _persist_tasks(session, mission.id, [], fresh)
+
+
+async def _persist_tasks(session: Session, mission_id: str, rows: list[Task], fresh: list[Task]) -> list[Task]:
+    if not fresh:
+        return _sorted_tasks(rows)
+    for t in fresh:
         session.add(t)
-    session.commit()
-    for t in out:
+    try:
+        session.commit()
+    except IntegrityError:
+        # Lost a race against a concurrent mission start (unique index on
+        # mission_id+kind): re-read what the winner persisted.
+        session.rollback()
+        winner = session.exec(select(Task).where(Task.mission_id == mission_id)).all()
+        return _sorted_tasks(list(winner))
+    for t in fresh:
         session.refresh(t)
-    return out
+    return _sorted_tasks(list(rows) + fresh)
 
 
 def json_dumps(obj: dict) -> str:

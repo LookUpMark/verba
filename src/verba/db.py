@@ -15,6 +15,16 @@ engine = create_engine(f"sqlite:///{settings.db_path}", echo=False)
 def init_db() -> None:
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(engine)
+    # create_all does not alter existing tables: add the (mission_id, kind)
+    # uniqueness to DBs created before the constraint existed. A DB holding
+    # pre-existing duplicates can't take the index — keep the app booting.
+    with engine.begin() as conn:
+        try:
+            conn.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_mission_kind ON tasks (mission_id, kind)"
+            )
+        except Exception as e:  # noqa: BLE001 — degraded schema is better than a dead app
+            print(f"[verba] could not add tasks uniqueness index: {e}", flush=True)
 
 
 def get_session() -> Iterator[Session]:

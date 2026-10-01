@@ -81,8 +81,19 @@ def complete_mission(mission_id: str, body: CompleteBody, session: Session = Dep
     mission = session.get(Node, mission_id)
     if mission is None or mission.kind != "mission":
         raise HTTPException(status_code=404, detail="mission not found")
-    total = max(1, body.total)
-    acc = max(0, min(100, round(100 * body.correct / total)))
+    # Score from the attempts actually recorded for this mission's tasks: the
+    # client body is trusted only as a fallback when no attempt exists, so
+    # forged correct/total values cannot inflate XP or accuracy.
+    from sqlmodel import select
+
+    task_ids = list(session.exec(select(Task.id).where(Task.mission_id == mission_id)).all())
+    attempts = list(session.exec(select(Attempt).where(Attempt.task_id.in_(task_ids))).all()) if task_ids else []
+    total = len(attempts)
+    correct = sum(1 for a in attempts if a.is_correct)
+    if total == 0:
+        total = max(1, body.total)
+        correct = max(0, min(body.correct, total))
+    acc = max(0, min(100, round(100 * correct / total)))
     gained = 20 + round(acc / 5)
 
     done = completed_ids(session)
@@ -93,7 +104,7 @@ def complete_mission(mission_id: str, body: CompleteBody, session: Session = Dep
 
     done_today = int(profile_get(session, "goal_done", "0")) + 1
     profile_set(session, "goal_done", str(done_today))
-    bump_daily(session, xp=gained, missions=1, errors=total - body.correct)
+    bump_daily(session, xp=gained, missions=1, errors=total - correct)
     session.commit()
 
     next_mission = None
