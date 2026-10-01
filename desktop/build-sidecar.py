@@ -34,6 +34,8 @@ def main() -> int:
     ext = ".exe" if platform.system() == "Windows" else ""
     name = f"verba-server-{triple}"
     DIST.mkdir(parents=True, exist_ok=True)
+    # --add-data separator is ';' on Windows, ':' elsewhere.
+    sep = ";" if platform.system() == "Windows" else ":"
     cmd = [
         sys.executable,
         "-m",
@@ -47,6 +49,9 @@ def main() -> int:
         str(HERE / "build"),
         "--specpath",
         str(HERE / "build"),
+        # The UI prototype rides inside the binary (served at / when frozen).
+        "--add-data",
+        f"{HERE.parent / 'index.html'}{sep}static",
         # The verba package must be importable (pip install -e .).
         "--paths",
         str(HERE.parent / "src"),

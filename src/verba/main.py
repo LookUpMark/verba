@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -75,8 +76,13 @@ for router in (
     app.include_router(router, prefix="/api")
 
 # The validated UI prototype ships with the backend: same product, one file.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_INDEX = _REPO_ROOT / "index.html"
+# Frozen sidecar: PyInstaller bundles it next to the binary (sys._MEIPASS,
+# added by build-sidecar.py --add-data). Dev/editable: the repo root.
+_INDEX_CANDIDATES = (
+    Path(getattr(sys, "_MEIPASS", "")) / "static" / "index.html",
+    Path(__file__).resolve().parents[2] / "index.html",
+)
+_INDEX = next((p for p in _INDEX_CANDIDATES if p.is_file()), _INDEX_CANDIDATES[-1])
 
 
 @app.get("/")
