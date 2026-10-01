@@ -6,6 +6,7 @@ under Tauri the sidecar serves the UI same-origin.
 
 from __future__ import annotations
 
+import atexit
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -24,6 +25,7 @@ from .models import ProfileEntry, RoleAssignment, RuntimeRecord
 from .providers import discovery
 from .providers.base import resolve_roles
 from .seed.loader import seed_all
+from .services import runtime_lifecycle
 
 PROFILE_DEFAULTS: dict[str, str] = {
     "level": "",
@@ -43,7 +45,16 @@ async def lifespan(app: FastAPI):
     with Session(engine) as session:
         seed_all(session)
         await discovery.discover(session)
+    # Probe the MLX runtime and spawn `omlx serve` if needed (never blocks
+    # boot; only an app-owned server is killed on shutdown). Osusume pattern.
+    runtime_lifecycle.ensure_llm_server()
     yield
+    runtime_lifecycle.shutdown_backend()
+
+
+# uvicorn owns the signal handlers, so SIGTERM skips exit hooks — atexit is
+# the reliable last line of defense for killing an owned LLM server.
+atexit.register(runtime_lifecycle.shutdown_backend)
 
 
 app = FastAPI(title="Verba", version="0.2.0", lifespan=lifespan)
@@ -145,8 +156,10 @@ def shutdown() -> dict[str, str]:
     """Graceful stop, called by the desktop shell on quit.
 
     SIGTERM kills uvicorn without running its exit handlers (always on
-    Windows), so the shell asks the server to stop itself first.
+    Windows), so the shell asks the server to stop itself first. Any LLM
+    server this process spawned goes down with it.
     """
+    runtime_lifecycle.shutdown_backend()
     server = getattr(app.state, "server", None)
     if server is None:
         raise HTTPException(status_code=409, detail="not running under a uvicorn.Server instance")
