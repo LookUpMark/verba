@@ -218,8 +218,12 @@ class LLMProvider(Protocol):
 |---|---|---|---|
 | `lmstudio` | OpenAI-compatible HTTP, `127.0.0.1:1234/v1` | `GET /v1/models` | `response_format: json_schema` |
 | `ollama` | native HTTP, `127.0.0.1:11434` | `GET /api/tags` | `format: <json schema>` |
-| `mlx` | `mlx-lm` OpenAI-compatible server | same as LM Studio probe | `response_format: json_schema` |
-| `hf_transformers` | in-process (last resort) | local model cache scan | `outlines` grammar-constrained decoding |
+| `mlx` | oMLX (PrismML) or `mlx-lm serve`, OpenAI-compatible | `GET /v1/models` with Bearer auth from `~/.omlx/settings.json` | `response_format: json_schema` + pydantic repair |
+| `hf_transformers` | in-process (last resort, milestone 2 stub) | local model cache scan | `outlines` grammar-constrained decoding |
+
+The MLX adapter talks to oMLX (the default MLX runtime on macOS installs): it sends the local API key as Bearer auth, disables thinking mode on chat templates (`chat_template_kwargs.enable_thinking=false`, so Qwen-style models don't burn the token budget on invisible reasoning) and strips any leftover `<think>` span from the stream. Transient 404/502/503s from a freshly spawned server are retred with backoff.
+
+**Runtime lifecycle** (oMLX, osusume pattern): at startup the backend probes the MLX endpoint; if nothing answers and a local oMLX install exists (CLI + models), it spawns `omlx serve` detached and refreshes the runtime discovery once the server responds. On shutdown only an app-owned server is killed (SIGTERM to its process group); a server someone else started is left running. No oMLX install means plain degraded mode.
 
 **Discovery at startup** (mirrors the Models screen):
 
@@ -247,11 +251,13 @@ All under `http://127.0.0.1:<port>/api`. JSON in/out unless noted. SSE endpoints
 
 | Method | Path | Purpose | Feeds prototype screen |
 |---|---|---|---|
-| `GET` | `/profile` | level, xp, streak, goal, placement | Path banner, Stats |
+| `GET` | `/health` | status + version + db path | desktop shell health poll |
+| `POST` | `/shutdown` | graceful stop (called by the shell on quit) | — |
+| `GET` | `/profile` | level, xp, streak, goal, placement (read-only) | Path banner, Stats |
 | `POST` | `/onboarding/placement` | score placement answers → level + initial unlocked set | Onboarding wizard |
 | `POST` | `/onboarding/goal` | set daily goal (XP target) | Onboarding wizard |
 | `GET` | `/path` | curriculum tree + completion status + current mission | Path |
-| `POST` | `/path/missions/{id}/start` | get (or lazily generate) the mission's task list | Lesson player |
+| `POST` | `/missions/{id}/start` | get (or lazily generate) the mission's task list | Lesson player |
 | `POST` | `/attempts` | submit a graded task answer → verdict + diagnosis | Lesson player |
 | `POST` | `/missions/{id}/complete` | finalize mission: XP, unlock next, errors → SRS | Mission complete |
 | `POST` | `/path/units/{id}/generate` | regenerate/extend a unit with the generator model | "Generate with AI" |
@@ -266,18 +272,19 @@ All under `http://127.0.0.1:<port>/api`. JSON in/out unless noted. SSE endpoints
 | `GET` | `/stats/overview` | xp, streak, accuracy, missions, totals | Stats |
 | `GET` | `/stats/daily?days=14` | per-day xp/missions/errors | Stats chart |
 | `GET` | `/stats/errors` | error counts by category | Stats / weak spots |
-| `GET` | `/runtimes` | detected runtimes + models | Models |
+| `GET` | `/runtimes` | detected runtimes + models + current role assignment | Models |
 | `POST` | `/runtimes/scan` | re-probe endpoints | Models |
 | `PUT` | `/roles` | assign model per role | Models |
-| `GET` | `/settings` / `PUT` | theme, UI language, goal, reset | Theme toggle, Reset demo |
+
+Roles are read from `GET /runtimes` (`roles` key); there is no separate `GET /roles`. Theme/UI preferences stay client-side for v0.1 (no `/settings` endpoint).
 
 **SSE contract for the tutor stream** (one connection per session):
 
 ```
 event: token        data: {"delta": "Good "}          # persona tokens
-event: message_end  data: {"message_id": "..."}       # tutor turn done
-event: diagnosis    data: { ...judge output... }      # async, after user message (§7.3)
-event: done         data: {"status": "complete"}
+event: message_end  data: {}                          # tutor turn done
+event: diagnosis    data: {"score", "errors", "reply_coach"}   # after a user message (§7.3)
+event: done         data: {"status": "complete"}      # or {"status": "error"} after event: error
 ```
 
 The tutor streams first (fast, small model is fine), the judge runs as a second call. Both land through the same provider layer; the UI shows the diagnosis card as soon as `diagnosis` fires — matching the prototype's chat flow.
@@ -404,15 +411,20 @@ repo root (verba)/
 
 Milestones in dependency order; each maps to working prototype screens:
 
-| # | Milestone | Prototype reference |
+| # | Milestone | Status |
 |---|---|---|
-| 1 | Provider layer + discovery + Models endpoints | Models screen |
-| 2 | Chat tutor with streaming tutor + judge diagnosis (rules pre-pass + LLM) | Tutor screen |
-| 3 | Curriculum generation for English A1→B2 + path endpoints | Path screen |
-| 4 | Task engine: all six kinds, seeded content + generation | Lesson player |
-| 5 | SRS (FSRS) + Review endpoints + error→drill loop | Review screen |
-| 6 | Stats endpoints + adaptive path ranking | Stats screen |
-| 7 | Voice: whisper.cpp STT on speaking tasks, Piper TTS on listening | Speaking/Listening tasks |
-| 8 | Tauri packaging (sidecar), onboarding + placement endpoints as first-run flow | Onboarding wizard |
+| 1 | Provider layer + discovery + Models endpoints | ✅ done (v0.1.0) — 4 adapters, oMLX Bearer auth + lifecycle |
+| 2 | Chat tutor with streaming tutor + judge diagnosis (rules pre-pass + LLM) | ✅ done (v0.1.0) — SSE token/message_end/diagnosis/done |
+| 3 | Curriculum generation for English A1→B2 + path endpoints | ✅ done (v0.1.0) — seeded skeleton (11 missions) + AI unit generation |
+| 4 | Task engine: all six kinds, seeded content + generation | ✅ done (v0.1.0) — lazy LLM generation with per-kind payload contract + retries |
+| 5 | SRS (FSRS) + Review endpoints + error→drill loop | ✅ done (v0.1.0) |
+| 6 | Stats endpoints + adaptive path ranking | ✅ done (v0.1.0) |
+| 7 | Voice: whisper.cpp STT on speaking tasks, Piper TTS on listening | 🔜 v0.2 — browser Speech API/speechSynthesis in the meantime |
+| 8 | Intel macOS (x86_64 Rosetta sidecar) + in-app updater check | 🔜 v0.2 — installers ship signed updater artifacts since v0.1.1 |
 
-Success criteria for v1: a learner can install, point Verba at an existing LM Studio/Ollama model, take a placement, complete missions with every error diagnosed and drilled, and hold a tutor conversation — with no network egress beyond the localhost probes.
+Also landed after v0.1.0: the prototype UI (index.html) talks to the real API when served by the
+backend same-origin (file:// keeps the offline demo), the PyInstaller sidecar bundles the UI
+(v0.1.0 packaged builds showed the JSON fallback instead of the app), and the oMLX server is
+spawned/killed with the app when nothing else owns it.
+
+Success criteria for v1: a learner can install, point Verba at an existing LM Studio/Ollama/oMLX model, take a placement, complete missions with every error diagnosed and drilled, and hold a tutor conversation — with no network egress beyond the localhost probes. ✅ met in v0.1.1.

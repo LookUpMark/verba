@@ -15,10 +15,44 @@ verba                       # = uvicorn verba.main:app --host 127.0.0.1 --port 8
 
 Open <http://127.0.0.1:8000/docs>.
 
-With LM Studio (`:1234`) or Ollama (`:11434`) running, `GET /api/runtimes`
-lists the detected models and assigns judge/tutor/generator automatically
-(largest → judge, next → tutor, smallest → generator). Override any role
-with `PUT /api/roles`.
+With LM Studio (`:1234`), Ollama (`:11434`) or oMLX (`:8080`, Bearer auth
+read from `~/.omlx/settings.json`) running, `GET /api/runtimes` lists the
+detected models and assigns judge/tutor/generator automatically (largest →
+judge, next → tutor, smallest → generator). Override any role with
+`PUT /api/roles`. If nothing is listening on the MLX port but an oMLX
+install exists, the backend spawns `omlx serve` itself and stops it on
+shutdown (only the server it started — the Osusume pattern).
+
+## First run — end-to-end verification
+
+```sh
+# 1. backend (Python 3.12)
+uv venv && uv pip install -e . && verba     # binds 127.0.0.1:8000
+
+# 2. LLM runtime: start LM Studio's server, `ollama serve`, or just rely on
+#    the oMLX auto-spawn above, then check detection + roles:
+curl -s http://127.0.0.1:8000/api/runtimes | python3 -m json.tool
+
+# 3. curriculum skeleton (11 missions A1-B2) + the UI on /
+curl -s http://127.0.0.1:8000/api/path | python3 -m json.tool
+open http://127.0.0.1:8000/
+
+# 4. one mission, end to end (tasks are LLM-generated on first open)
+MID=$(curl -s http://127.0.0.1:8000/api/path | python3 -c "import json,sys;print(json.load(sys.stdin)['current'])")
+curl -s -X POST http://127.0.0.1:8000/api/missions/$MID/start | python3 -m json.tool
+#    ... answer the six tasks via POST /api/attempts {task_id, answer, latency_ms}
+#    ... then POST /api/missions/$MID/complete {correct, total}
+
+# 5. tutor chat (SSE): session, message with classic Italian-speaker errors, stream
+SID=$(curl -s -X POST http://127.0.0.1:8000/api/chat/sessions -H 'Content-Type: application/json' -d '{"scenario":"airport"}' | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
+curl -s -X POST http://127.0.0.1:8000/api/chat/sessions/$SID/messages -H 'Content-Type: application/json' -d '{"text":"I am agree with you, and I have 25 years."}' >/dev/null
+curl -N http://127.0.0.1:8000/api/chat/sessions/$SID/stream
+#    -> token ... message_end, then a diagnosis event flagging "I am agree" and
+#       "I have 25 years"; the errors land in /api/review/queue automatically
+```
+
+Every reply from a model passes the JSON-schema + repair pipeline (§5 of
+`architecture.md`); the tutor and judge prompts stay separate by design.
 
 ## Configuration (env vars)
 
@@ -65,8 +99,10 @@ CI/CD (`.github/workflows/`):
   on the three OS matrix rows.
 - **Release** — `release.yml` on tag `v*`: reads the version from
   `pyproject.toml`, builds sidecar + installers on
-  macOS (arm64 + x86_64), Windows and Linux, attaches dmg/msi/exe/deb/AppImage
-  to a draft GitHub Release, then publishes it.
+  macOS (arm64; Intel macOS needs a Rosetta sidecar, planned for v0.2),
+  Windows and Linux, attaches dmg/msi/exe/deb/AppImage
+  to a draft GitHub Release, then publishes it. Installers ship signed
+  updater artifacts (`.sig` + `latest.json`) since v0.1.1.
 
 Optional secrets: `MACOS_CERTIFICATE` + `MACOS_CERTIFICATE_PWD` +
 `KEYCHAIN_PASSWORD` (codesign/notarize), `TAURI_SIGNING_PRIVATE_KEY` (+password)

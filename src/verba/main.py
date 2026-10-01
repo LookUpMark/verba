@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from . import __version__
 from .api import routes_chat, routes_lessons, routes_path, routes_review, routes_stats
 from .config import settings
 from .db import engine, get_session, init_db
@@ -58,7 +59,7 @@ async def lifespan(app: FastAPI):
 atexit.register(runtime_lifecycle.shutdown_backend)
 
 
-app = FastAPI(title="Verba", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Verba", version=__version__, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1", "http://localhost"],  # dev SPA; same-origin under Tauri

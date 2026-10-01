@@ -1,6 +1,6 @@
 [package]
 name = "verba-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Verba desktop shell - Tauri v2 window + FastAPI sidecar"
 edition = "2021"
 
