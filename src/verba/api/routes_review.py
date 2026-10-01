@@ -31,7 +31,10 @@ def _due_rows(session: Session) -> list[SrsCard]:
 def queue(session: Session = Depends(get_session)) -> dict[str, Any]:
     rows = _due_rows(session)
     return {
-        "due": [{"id": c.id, "front": c.front, "back": c.back, "example": c.example, "stability": c.stability} for c in rows],
+        "due": [
+            {"id": c.id, "front": c.front, "back": c.back, "example": c.example, "stability": c.stability, "source": c.source}
+            for c in rows
+        ],
         "count": len(rows),
     }
 

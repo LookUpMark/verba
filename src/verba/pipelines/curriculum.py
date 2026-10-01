@@ -90,7 +90,7 @@ async def generate_unit(session: Session, unit: Node) -> list[Node]:
     if not existing:
         raise HTTPException(status_code=404, detail="unit not found")
     level = unit.cefr or "A2"
-    known = [t for (t,) in session.exec(select(Node.title).where(Node.kind == "mission")).all()]
+    known = list(session.exec(select(Node.title).where(Node.kind == "mission")).all())
     raw = await generate_structured(
         session,
         "generator",

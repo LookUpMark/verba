@@ -705,7 +705,7 @@ kbd {
           <h1 id="tutor-title">Tutor</h1>
           <p class="sub">Talk your way through real situations. Every reply is judged: errors classified, explained, and sent to Review.</p>
         </div>
-        <span class="badge badge-muted"><span class="badge-dot" aria-hidden="true"></span>Rule-based judge · simulated AI</span>
+        <span class="badge badge-muted" id="tutor-mode-badge"><span class="badge-dot" aria-hidden="true"></span>Rule-based judge · simulated AI</span>
       </div>
       <div class="tutor-grid">
         <div class="scenario-list" id="scenario-list" role="group" aria-label="Scenarios"></div>
@@ -725,6 +725,7 @@ kbd {
               Send
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
             </button>
+            <button class="btn btn-ghost btn-sm" id="chat-finish" hidden>Finish</button>
           </div>
         </div>
       </div>
@@ -795,6 +796,7 @@ kbd {
           <h1 id="models-title">Models &amp; runtimes</h1>
           <p class="sub">Verba runs entirely on your machine. It auto-detects local runtimes at startup and assigns a model to each role.</p>
         </div>
+        <button class="btn btn-secondary btn-sm" id="btn-rescan" hidden>Rescan runtimes</button>
       </div>
       <div class="runtime-grid" id="runtime-list"></div>
       <div class="card roles-card">
@@ -919,7 +921,103 @@ function bumpDaily(xpGain, missions, errors) {
   d.errors += errors;
 }
 let state = loadState();
-function save() { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
+function save() { if (API.mode) return; try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {} }
+
+/* ─── Backend API layer ───────────────────────────────────────────────
+   Active when the page is served same-origin by the local backend
+   (http://127.0.0.1). From file:// the prototype keeps its offline
+   localStorage behaviour unchanged. In API mode the backend is the
+   source of truth: `state` stays a view-model refreshed via GETs and
+   every mutation goes through its endpoint. */
+const API = {
+  mode: false,
+  scenarios: [],
+  _profile: null,
+  _dueQueue: null,
+  _statsErrors: [],
+  async detect() {
+    if (!/^https?:$/.test(location.protocol)) return false;
+    try { const r = await fetch("/api/health"); this.mode = r.ok; }
+    catch (e) { this.mode = false; }
+    return this.mode;
+  },
+  async req(method, url, body) {
+    const r = await fetch(url, {
+      method: method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!r.ok) {
+      let detail = "";
+      try { detail = (await r.json()).detail || ""; } catch (e) {}
+      const err = new Error(detail || (method + " " + url + " failed (" + r.status + ")"));
+      err.status = r.status;
+      throw err;
+    }
+    return r.json();
+  },
+  get(u) { return this.req("GET", u); },
+  post(u, b) { return this.req("POST", u, b || {}); },
+  put(u, b) { return this.req("PUT", u, b); },
+  errText(e) { return e && e.message ? e.message : "Request failed"; },
+  prettyCat(c) { return String(c || "grammar").replace(/_/g, " ").replace(/\b\w/g, function (ch) { return ch.toUpperCase(); }); },
+  async refreshPath() { const p = await this.get("/api/path"); this.applyPath(p); return p; },
+  applyPath(p) {
+    state.completed = [];
+    state.current = p.current;
+    if (p.level) state.level = p.level;
+    state.xp = p.xp;
+    state.streak = p.streak;
+    UNITS.length = 0;
+    p.tree.forEach(function (lev) {
+      lev.units.forEach(function (u) {
+        UNITS.push({
+          level: lev.cefr, title: u.title, apiId: u.id,
+          missions: u.missions.map(function (m) { return { id: m.id, title: m.title, generated: m.generated, ai: m.generated }; })
+        });
+        u.missions.forEach(function (m) { if (m.state === "done") state.completed.push(m.id); });
+      });
+    });
+  },
+  async hydrate() {
+    const self = this;
+    const res = await Promise.all([this.get("/api/profile"), this.get("/api/path"), this.get("/api/chat/scenarios")]);
+    this._profile = res[0];
+    state.onboarded = res[0].onboarded === "1";
+    if (res[0].level) state.level = res[0].level;
+    state.goalTarget = parseInt(res[0].goal_target || "20", 10) || 20;
+    state.goalDone = parseInt(res[0].goal_done || "0", 10) || 0;
+    try { state.theme = localStorage.getItem("verba-theme") || res[0].theme || null; } catch (e) { state.theme = res[0].theme || null; }
+    state.errors = [];
+    state.srsDone = [];
+    state.totals = { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
+    this.applyPath(res[1]);
+    this.scenarios = res[2].map(function (s) { return { id: s.id, name: s.name, persona: s.persona, role: s.role, level: s.level }; });
+  },
+  mapTask(t) {
+    const p = t.payload || {};
+    const out = { id: t.id, kind: t.kind, why: p.why || "", say: p.say };
+    out.prompt = p.prompt || (t.kind === "listening" ? "Type what you hear:" : t.kind === "speaking" ? "Say this sentence:" : "");
+    if (t.kind === "mc" || t.kind === "gap") { out.choices = p.choices; out.answer = p.answer; }
+    if (t.kind === "translate" || t.kind === "listening") { out.accepted = p.accepted; out.answerText = p.answerText || (p.accepted || [])[0]; }
+    if (t.kind === "order") out.words = p.words;
+    return out;
+  },
+  mapDiagnosis(d) {
+    return {
+      score: d.score,
+      errors: (d.errors || []).map(function (e) {
+        return { cat: API.prettyCat(e.category), wrong: e.wrong, right: e.right, why: e.explanation };
+      })
+    };
+  },
+  applyModeBadges() {
+    const note = document.querySelector(".proto-note");
+    if (note) note.textContent = "Local backend · live models · data stays on your machine";
+    const tb = $("#tutor-mode-badge");
+    if (tb) tb.innerHTML = '<span class="badge-dot" aria-hidden="true"></span>Local model · live judge';
+  }
+};
 
 /* ─── Icons (inline, single family, stroke 1.75) ────────────────────── */
 function icon(name) {
@@ -1148,7 +1246,7 @@ function renderPath() {
       node.className = "mnode " + st + (m.ai ? " ai" : "");
       node.innerHTML =
         '<button class="mnode-btn" aria-label="' + m.title + " — " + st + '">' +
-          (st === "done" ? icon("check") : st === "current" ? icon("play") : m.ai ? icon("spark") : icon("lock")) +
+          (st === "done" ? icon("check") : st === "locked" ? icon("lock") : m.ai ? icon("spark") : icon("play")) +
         "</button>" +
         '<span class="mnode-label">' + m.title + "</span>" +
         (m.ai ? '<span class="chip">AI-generated</span>' : "");
@@ -1172,10 +1270,20 @@ const AI_MISSION_POOL = [
   { title: "Future arrangements", set: "b1" },
   { title: "At the restaurant", set: "a2b" }
 ];
-function regenerateUnit(unit, btn) {
+async function regenerateUnit(unit, btn) {
   btn.disabled = true;
   const old = btn.innerHTML;
   btn.innerHTML = icon("refresh") + " Generating…";
+  if (API.mode) {
+    try {
+      const r = await API.post("/api/path/units/" + encodeURIComponent(unit.apiId) + "/generate");
+      await API.refreshPath();
+      renderPath();
+      toast(r.created.length + " new mission" + (r.created.length === 1 ? "" : "s") + " generated for " + unit.level + ".");
+    } catch (e) { toast(API.errText(e)); }
+    btn.innerHTML = old;
+    return;
+  }
   setTimeout(() => {
     const id = "ai-" + unit.level + "-" + state.aiCount;
     const pick = AI_MISSION_POOL[state.aiCount % AI_MISSION_POOL.length];
@@ -1196,16 +1304,30 @@ function norm(s) {
     .replace(/\s+/g, " ")
     .trim();
 }
-function startLesson(missionId) {
+async function startLesson(missionId) {
   const m = missionById(missionId);
   if (!m) return;
-  const set = TASK_SETS[m.set];
-  if (!set) { toast("This mission has no tasks yet."); return; }
-  lesson = { mission: m, tasks: set, i: 0, correct: 0, done: false };
   $("#lesson-title").textContent = "Mission · " + m.title;
   showScreen("lesson");
   const body = $("#lesson-body");
   body.innerHTML = '<div class="skeleton" style="height:200px" aria-label="Loading task"></div>';
+  if (API.mode) {
+    try {
+      const data = await API.post("/api/missions/" + encodeURIComponent(missionId) + "/start");
+      lesson = { mission: m, tasks: data.tasks.map(API.mapTask), i: 0, correct: 0, done: false, errors: [] };
+    } catch (e) {
+      toast(API.errText(e));
+      body.innerHTML = "";
+      renderPath();
+      showScreen("path");
+      return;
+    }
+    renderTask();
+    return;
+  }
+  const set = TASK_SETS[m.set];
+  if (!set) { toast("This mission has no tasks yet."); return; }
+  lesson = { mission: m, tasks: set, i: 0, correct: 0, done: false };
   setTimeout(renderTask, 450);
 }
 function updateProgress() {
@@ -1216,6 +1338,7 @@ function updateProgress() {
 }
 function renderTask() {
   updateProgress();
+  lesson.taskShownAt = Date.now();
   const body = $("#lesson-body");
   const t = lesson.tasks[lesson.i];
   body.innerHTML = "";
@@ -1261,7 +1384,7 @@ function renderTask() {
       });
       zone.appendChild(b);
     });
-    check.addEventListener("click", () => grade(t, t.choices[selected] === t.choices[t.answer], t.choices[t.answer]));
+    check.addEventListener("click", () => grade(t, t.choices[selected] === t.choices[t.answer], t.choices[t.answer], "abcd"[selected]));
   } else if (t.kind === "translate" || t.kind === "listening") {
     const input = document.createElement("input");
     input.className = "tutor-input";
@@ -1279,7 +1402,7 @@ function renderTask() {
     const go = () => {
       const v = norm(input.value);
       check.disabled = true;
-      grade(t, t.accepted.some(a => norm(a) === v), t.answerText || t.accepted[0]);
+      grade(t, t.accepted.some(a => norm(a) === v), t.answerText || t.accepted[0], input.value);
     };
     input.addEventListener("input", () => { check.disabled = input.value.trim().length === 0; });
     input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !check.disabled) go(); });
@@ -1321,7 +1444,7 @@ function renderTask() {
     zone.appendChild(pool);
     check.addEventListener("click", () => {
       const built = picked.map(i => t.words[i]).join(" ");
-      grade(t, built === t.words.join(" "), t.words.join(" "));
+      grade(t, built === t.words.join(" "), t.words.join(" "), built);
     });
   } else if (t.kind === "speaking") {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1431,39 +1554,60 @@ function renderTask() {
         return m / tw.length;
       })();
       check.disabled = true;
-      grade(t, ratio >= 0.8, t.say);
+      grade(t, ratio >= 0.8, t.say, heard);
     });
   }
 }
-function grade(t, isOk, correctText) {
+async function grade(t, isOk, correctText, rawAnswer) {
   const fb = $("#lesson-feedback");
-  state.totals = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
-  state.totals.tasks += 1;
-  if (isOk) state.totals.correct += 1;
-  if (isOk) { lesson.correct += 1; }
+  let ok = isOk, right = correctText, why = t.why, cat = catOf(t);
+  if (API.mode) {
+    try {
+      const r = await API.post("/api/attempts", {
+        task_id: t.id,
+        answer: String(rawAnswer == null ? "" : rawAnswer),
+        latency_ms: Date.now() - (lesson.taskShownAt || Date.now())
+      });
+      ok = r.correct;
+      right = r.correct_answer || right;
+      why = r.why || (t.kind === "speaking" ? "Speaking drill: repeat the model sentence after the audio." : "");
+      cat = API.prettyCat(r.category);
+    } catch (e) { toast(API.errText(e)); }
+  }
+  if (!API.mode) {
+    state.totals = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
+    state.totals.tasks += 1;
+    if (isOk) state.totals.correct += 1;
+  }
+  if (ok) { lesson.correct += 1; }
   else {
     const errWhy = t.kind === "speaking"
       ? "Speaking drill: repeat the model sentence after the audio."
-      : t.why;
-    state.errors.push({
-      cat: catOf(t),
-      wrong: t.kind === "speaking" ? ("you said: " + (lesson.lastHeard || "(nothing heard)")) : "(task " + (lesson.i + 1) + ")",
-      right: stripTags(correctText),
-      why: stripTags(errWhy),
-      ts: Date.now()
-    });
-    save();
+      : why;
+    if (API.mode) {
+      lesson.errors = lesson.errors || [];
+      lesson.errors.push({ cat: cat, right: stripTags(right), why: stripTags(errWhy), ts: Date.now() });
+    } else {
+      state.errors.push({
+        cat: catOf(t),
+        wrong: t.kind === "speaking" ? ("you said: " + (lesson.lastHeard || "(nothing heard)")) : "(task " + (lesson.i + 1) + ")",
+        right: stripTags(correctText),
+        why: stripTags(errWhy),
+        ts: Date.now()
+      });
+      save();
+    }
   }
-  fb.className = "feedback " + (isOk ? "ok" : "ko");
+  fb.className = "feedback " + (ok ? "ok" : "ko");
   const wrongHtml =
-    '<span class="why">Correct answer: <strong>' + correctText + "</strong></span>" +
+    '<span class="why">Correct answer: <strong>' + right + "</strong></span>" +
     '<span class="why dx-why">' + (t.kind === "speaking"
       ? "You said: “" + (lesson.lastHeard || "—") + "”. Prototype check — word recognition only; the real app scores pronunciation with whisper.cpp."
-      : t.why) + "</span>" +
-    '<span class="cat"><span class="badge badge-danger">' + catOf(t) + "</span></span>";
+      : why) + "</span>" +
+    '<span class="cat"><span class="badge badge-danger">' + cat + "</span></span>";
   fb.innerHTML =
-    '<span class="verdict">' + (isOk ? icon("check") + " Correct" : icon("x") + " Not quite") + "</span>" +
-    (isOk ? '<span class="why">' + (t.ok || (t.kind === "speaking" ? "Clear and complete." : "Well done.")) + "</span>" : wrongHtml);
+    '<span class="verdict">' + (ok ? icon("check") + " Correct" : icon("x") + " Not quite") + "</span>" +
+    (ok ? '<span class="why">' + (t.ok || (t.kind === "speaking" ? "Clear and complete." : "Well done.")) + "</span>" : wrongHtml);
   const actions = document.querySelector(".lesson-actions");
   actions.innerHTML = "";
   const next = document.createElement("button");
@@ -1485,25 +1629,42 @@ function catOf(t) {
   return "Grammar";
 }
 function stripTags(s) { const d = document.createElement("div"); d.innerHTML = s; return d.textContent || ""; }
-function renderComplete() {
+async function renderComplete() {
   const body = $("#lesson-body");
   $("#lesson-progress").style.width = "100%";
   $("#lesson-progressbar").setAttribute("aria-valuenow", "100");
   $("#lesson-step").textContent = lesson.tasks.length + " / " + lesson.tasks.length;
   const mission = lesson.mission;
-  const acc = Math.round((lesson.correct / lesson.tasks.length) * 100);
-  const gained = 20 + Math.round(acc / 5);
+  let acc = Math.round((lesson.correct / lesson.tasks.length) * 100);
+  let gained = 20 + Math.round(acc / 5);
+  let nextM = null;
+  if (API.mode) {
+    try {
+      const r = await API.post("/api/missions/" + encodeURIComponent(mission.id) + "/complete", {
+        correct: lesson.correct,
+        total: lesson.tasks.length
+      });
+      gained = r.xp_gained;
+      acc = r.accuracy;
+      nextM = r.next || null;
+    } catch (e) { toast(API.errText(e)); }
+    state.xp += gained;
+    try { await API.refreshPath(); } catch (e) {}
+  } else {
+    const missed = lesson.tasks.length - lesson.correct;
+    state.xp += gained;
+    state.totals = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
+    state.totals.lessons += 1;
+    bumpDaily(gained, 1, missed);
+    if (!state.completed.includes(mission.id)) state.completed.push(mission.id);
+    const flat = allMissions();
+    const idx = flat.findIndex(m => m.id === mission.id);
+    nextM = flat.slice(idx + 1).find(m => !state.completed.includes(m.id) && !m.ai) || null;
+    if (nextM) state.current = nextM.id;
+    save();
+  }
   const missed = lesson.tasks.length - lesson.correct;
-  state.xp += gained;
-  state.totals = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
-  state.totals.lessons += 1;
-  bumpDaily(gained, 1, missed);
-  if (!state.completed.includes(mission.id)) state.completed.push(mission.id);
-  const flat = allMissions();
-  const idx = flat.findIndex(m => m.id === mission.id);
-  const nextM = flat.slice(idx + 1).find(m => !state.completed.includes(m.id) && !m.ai) || null;
-  if (nextM) state.current = nextM.id;
-  save();
+  const missionErrors = lesson.errors ? lesson.errors.slice() : [];
   updateStats();
   lesson = null;
 
@@ -1549,7 +1710,7 @@ function renderComplete() {
 
   const seen = new Set();
   const uniq = [];
-  state.errors.slice().reverse().forEach(function (e) {
+  (API.mode ? missionErrors : state.errors).slice().reverse().forEach(function (e) {
     if (!seen.has(e.why) && uniq.length < 3) { seen.add(e.why); uniq.push(e); }
   });
   if (uniq.length) {
@@ -1667,23 +1828,39 @@ const SCENARIOS = [
 ];
 let chat = null;
 function ensureChatStarted() {
-  if (chat && chat.scenarioId) return;
-  startScenario(SCENARIOS[0].id);
+  if (chat && chat.sc) return;
+  const first = API.mode ? (API.scenarios[0] && API.scenarios[0].id) : SCENARIOS[0].id;
+  if (first) startScenario(first);
 }
-function startScenario(id) {
-  const sc = SCENARIOS.find(s => s.id === id);
-  chat = { sc: sc, step: 0, scores: [], errors: [] };
+async function startScenario(id) {
+  const list = API.mode ? API.scenarios : SCENARIOS;
+  const sc = list.find(s => s.id === id);
+  if (!sc) return;
+  if (API.mode && chat && chat.sessionId && chat.sc && chat.sc.id !== sc.id) {
+    if (chat.es) { try { chat.es.close(); } catch (e) {} }
+    try { await API.post("/api/chat/sessions/" + chat.sessionId + "/finish"); } catch (e) {}
+  }
+  chat = { sc: sc, step: 0, scores: [], errors: [], sessionId: null, lastUserBubble: null, es: null };
   $("#chat-name").textContent = sc.persona;
   $("#chat-role").textContent = sc.role + " · calibrated to " + sc.level;
   $("#chat-avatar").textContent = sc.persona[0];
   $("#chat-log").innerHTML = "";
   renderScenarioList();
+  if (API.mode) {
+    try {
+      const s = await API.post("/api/chat/sessions", { scenario: sc.id });
+      chat.sessionId = s.id;
+      apiStreamSession(chat);
+    } catch (e) { toast(API.errText(e)); }
+    return;
+  }
   tutorSay(sc.steps[0], 500);
 }
 function renderScenarioList() {
   const root = $("#scenario-list");
   root.innerHTML = "";
-  SCENARIOS.forEach(s => {
+  const list = API.mode ? API.scenarios : SCENARIOS;
+  list.forEach(s => {
     const b = document.createElement("button");
     b.className = "scenario";
     b.setAttribute("aria-pressed", chat && chat.sc.id === s.id ? "true" : "false");
@@ -1692,7 +1869,7 @@ function renderScenarioList() {
     root.appendChild(b);
   });
 }
-function pushUser(text, diagnosis) {
+function pushUser(text, diagnosis, keepRef) {
   const log = $("#chat-log");
   const w = document.createElement("div");
   w.className = "msg user";
@@ -1700,6 +1877,7 @@ function pushUser(text, diagnosis) {
   w.querySelector(".bubble").textContent = text;
   log.appendChild(w);
   if (diagnosis) w.appendChild(diagnosisCard(diagnosis));
+  if (keepRef && chat) chat.lastUserBubble = w;
   log.scrollTop = log.scrollHeight;
 }
 function diagnosisCard(d) {
@@ -1715,7 +1893,7 @@ function diagnosisCard(d) {
   }
   card.innerHTML =
     '<div class="dx-head"><span class="score-chip ' + cls + '">' + d.score + "/100</span>" +
-    '<span class="badge badge-muted"><span class="badge-dot"></span>Rule-based judge · prototype</span></div>' + rows;
+    '<span class="badge badge-muted"><span class="badge-dot"></span>' + (API.mode ? "Local judge · live" : "Rule-based judge · prototype") + "</span></div>'" + rows;
   return card;
 }
 function judge(text) {
@@ -1749,11 +1927,71 @@ function tutorSay(text, delay) {
     log.scrollTop = log.scrollHeight;
   }, delay || 800);
 }
-function sendChat() {
+function apiStreamSession(chatRef) {
+  if (chatRef.es) { try { chatRef.es.close(); } catch (e) {} chatRef.es = null; }
+  const es = new EventSource("/api/chat/sessions/" + chatRef.sessionId + "/stream");
+  chatRef.es = es;
+  chatRef.streaming = true;
+  const log = $("#chat-log");
+  const typing = document.createElement("div");
+  typing.className = "typing";
+  typing.innerHTML = "<span></span><span></span><span></span>";
+  log.appendChild(typing);
+  log.scrollTop = log.scrollHeight;
+  let bubble = null;
+  function ensureBubble() {
+    if (bubble) return;
+    typing.remove();
+    const w = document.createElement("div");
+    w.className = "msg tutor";
+    w.innerHTML = '<div class="bubble"></div>';
+    bubble = w.querySelector(".bubble");
+    log.appendChild(w);
+  }
+  function close() { es.close(); chatRef.es = null; chatRef.streaming = false; typing.remove(); }
+  es.addEventListener("token", function (ev) {
+    ensureBubble();
+    let d = {};
+    try { d = JSON.parse(ev.data); } catch (e) {}
+    if (d.delta) bubble.textContent += d.delta;
+    log.scrollTop = log.scrollHeight;
+  });
+  es.addEventListener("diagnosis", function (ev) {
+    let d = {};
+    try { d = JSON.parse(ev.data); } catch (e) {}
+    chatRef.scores.push(typeof d.score === "number" ? d.score : 100);
+    (d.errors || []).forEach(function (e) { chatRef.errors.push({ cat: API.prettyCat(e.category), wrong: e.wrong, right: e.right, why: e.explanation }); });
+    const card = diagnosisCard(API.mapDiagnosis(d));
+    if (chatRef.lastUserBubble) chatRef.lastUserBubble.appendChild(card);
+    else log.appendChild(card);
+    log.scrollTop = log.scrollHeight;
+  });
+  es.addEventListener("done", close);
+  es.addEventListener("error", function (ev) {
+    let detail = "Tutor unavailable — check your local model.";
+    if (ev.data) { try { detail = JSON.parse(ev.data).detail || detail; } catch (e) {} }
+    close();
+    toast(detail);
+  });
+}
+async function sendChat() {
   const input = $("#chat-input");
   const text = input.value.trim();
   if (!text || !chat) return;
   input.value = "";
+  if (API.mode) {
+    if (!chat.sessionId) { input.value = text; toast("Connecting to the tutor — try again in a moment."); return; }
+    if (chat.streaming) { input.value = text; toast("Wait for the tutor's reply…"); return; }
+    pushUser(text, null, true);
+    try {
+      await API.post("/api/chat/sessions/" + chat.sessionId + "/messages", { text: text });
+    } catch (e) {
+      toast(API.errText(e));
+      return;
+    }
+    apiStreamSession(chat);
+    return;
+  }
   const d = judge(text);
   chat.scores.push(d.score);
   d.errors.forEach(e => chat.errors.push(e));
@@ -1769,14 +2007,22 @@ function sendChat() {
     tutorSay(coach + chat.sc.steps[chat.step], 1000);
   }
 }
-function showChatSummary() {
+function showChatSummary(apiFin) {
   const log = $("#chat-log");
-  state.totals = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
-  state.totals.scenarios += 1;
-  save();
-  const avg = chat.scores.length ? Math.round(chat.scores.reduce((a, b) => a + b, 0) / chat.scores.length) : 100;
+  if (!API.mode) {
+    state.totals = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
+    state.totals.scenarios += 1;
+    save();
+  }
+  const avg = API.mode
+    ? apiFin.avg_score
+    : (chat.scores.length ? Math.round(chat.scores.reduce((a, b) => a + b, 0) / chat.scores.length) : 100);
   const byCat = {};
-  chat.errors.forEach(e => { byCat[e.cat] = (byCat[e.cat] || 0) + 1; });
+  if (API.mode) {
+    Object.keys(apiFin.by_category || {}).forEach(function (c) { byCat[API.prettyCat(c)] = apiFin.by_category[c]; });
+  } else {
+    chat.errors.forEach(e => { byCat[e.cat] = (byCat[e.cat] || 0) + 1; });
+  }
   const cats = Object.keys(byCat).map(c =>
     '<div class="bstat"><span class="num">' + byCat[c] + '</span><span class="lbl">' + c + "</span></div>"
   ).join("") || '<div class="bstat"><span class="num">0</span><span class="lbl">Errors</span></div>';
@@ -1786,19 +2032,29 @@ function showChatSummary() {
     '<p class="eyebrow">Scenario complete</p>' +
     '<h3>' + chat.sc.name + " — done</h3>" +
     '<div class="summary-stats"><div class="bstat"><span class="num">' + avg + '</span><span class="lbl">Avg score</span></div>' + cats + "</div>" +
-    '<p class="small">In the real app, the judge runs on your local model and every error here lands in your Review queue.</p>';
+    (API.mode
+      ? '<p class="small">Every error above was diagnosed by your local judge — it is already in your Review queue.</p>'
+      : '<p class="small">In the real app, the judge runs on your local model and every error here lands in your Review queue.</p>');
   const btn = document.createElement("button");
   btn.className = "btn btn-primary";
   btn.style.justifySelf = "start";
-  btn.innerHTML = "Add " + chat.errors.length + " errors to Review " + icon("arrow");
-  btn.addEventListener("click", () => {
-    chat.errors.forEach(e => state.errors.push({ cat: e.cat, wrong: e.wrong, right: e.right, why: e.why, ts: Date.now() }));
-    bumpDaily(0, 0, chat.errors.length);
-    save();
-    toast(chat.errors.length + " errors added to Review.");
-    renderReview();
-    showScreen("review");
-  });
+  if (API.mode) {
+    btn.innerHTML = "Review your errors " + icon("arrow");
+    btn.addEventListener("click", function () {
+      renderReview();
+      showScreen("review");
+    });
+  } else {
+    btn.innerHTML = "Add " + chat.errors.length + " errors to Review " + icon("arrow");
+    btn.addEventListener("click", () => {
+      chat.errors.forEach(e => state.errors.push({ cat: e.cat, wrong: e.wrong, right: e.right, why: e.why, ts: Date.now() }));
+      bumpDaily(0, 0, chat.errors.length);
+      save();
+      toast(chat.errors.length + " errors added to Review.");
+      renderReview();
+      showScreen("review");
+    });
+  }
   box.appendChild(btn);
   log.appendChild(box);
   log.scrollTop = log.scrollHeight;
@@ -1806,6 +2062,14 @@ function showChatSummary() {
 }
 $("#chat-send").addEventListener("click", sendChat);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+$("#chat-finish").addEventListener("click", async function () {
+  if (!chat || !chat.sessionId) return;
+  if (chat.es) { try { chat.es.close(); } catch (e) {} chat.es = null; }
+  try {
+    const r = await API.post("/api/chat/sessions/" + chat.sessionId + "/finish");
+    showChatSummary(r);
+  } catch (e) { toast(API.errText(e)); }
+});
 
 /* ─── Review screen ─────────────────────────────────────────────────── */
 const SEED_CARDS = [
@@ -1837,13 +2101,34 @@ function queue() {
   const seeds = SEED_CARDS.filter(c => !state.srsDone.includes(c.id));
   return seeds.concat(errorCards());
 }
-function renderReview() {
-  state.goalDone = Math.min(state.goalDone, state.goalTarget);
+async function renderReview() {
+  if (API.mode) {
+    try {
+      const res = await Promise.all([API.get("/api/review/queue"), API.get("/api/profile"), API.get("/api/stats/errors")]);
+      API._profile = res[1];
+      state.goalTarget = parseInt(res[1].goal_target || "20", 10) || 20;
+      state.goalDone = Math.min(parseInt(res[1].goal_done || "0", 10) || 0, state.goalTarget);
+      API._dueQueue = res[0].due.map(function (c) {
+        return {
+          id: c.id, front: c.front, back: c.back, example: c.example || "",
+          isErr: String(c.source || "").indexOf("error") === 0
+        };
+      });
+      API._statsErrors = res[2];
+    } catch (e) {
+      toast(API.errText(e));
+      API._dueQueue = API._dueQueue || [];
+    }
+  }
   $("#goal-text").textContent = state.goalDone + " / " + state.goalTarget + " cards";
   $("#goal-fill").style.width = Math.round((state.goalDone / state.goalTarget) * 100) + "%";
 
   const byCat = {};
-  state.errors.forEach(e => { byCat[e.cat] = (byCat[e.cat] || 0) + 1; });
+  if (API.mode) {
+    API._statsErrors.forEach(function (x) { byCat[API.prettyCat(x.category)] = x.count; });
+  } else {
+    state.errors.forEach(e => { byCat[e.cat] = (byCat[e.cat] || 0) + 1; });
+  }
   const cats = Object.keys(byCat);
   const weak = $("#weakspots");
   if (!cats.length) {
@@ -1856,7 +2141,7 @@ function renderReview() {
     }).join("");
   }
 
-  const q = queue();
+  const q = API.mode ? (API._dueQueue || []) : queue();
   const card = $("#srs-card");
   if (!q.length) {
     card.innerHTML =
@@ -1889,7 +2174,17 @@ function renderReview() {
       const b = document.createElement("button");
       b.className = "btn " + cls;
       b.textContent = label;
-      b.addEventListener("click", () => {
+      b.addEventListener("click", async function () {
+        if (API.mode) {
+          try {
+            await API.post("/api/review/grade", { card_id: c.id, grade: label.toLowerCase() });
+          } catch (e) { toast(API.errText(e)); return; }
+          srsRevealed = false;
+          if (label === "Again") srsIdx += 1;
+          await renderReview();
+          if (label !== "Again") toast("Card scheduled — FSRS sets the next review date.");
+          return;
+        }
         if (label !== "Again") {
           state.srsDone.push(c.id);
           state.goalDone += 1;
@@ -1904,10 +2199,30 @@ function renderReview() {
     });
   }
 }
-function extraDrills() {
+async function extraDrills() {
   const btn = $("#btn-extra");
   btn.disabled = true;
   btn.innerHTML = icon("refresh") + " Generating…";
+  if (API.mode) {
+    try {
+      const r = await API.post("/api/review/generate");
+      if (r.created) {
+        toast(r.created + " drill" + (r.created === 1 ? "" : "s") + " generated from your errors.");
+        srsIdx = 0;
+        srsRevealed = false;
+        await renderReview();
+      } else {
+        toast(r.detail || "No errors to drill yet.");
+        btn.disabled = false;
+        btn.innerHTML = icon("spark") + " Generate extra drills";
+      }
+    } catch (e) {
+      toast(API.errText(e));
+      btn.disabled = false;
+      btn.innerHTML = icon("spark") + " Generate extra drills";
+    }
+    return;
+  }
   setTimeout(() => {
     const extras = [
       { id: "x1", front: "make vs do", back: "make = create/produce (make a plan) · do = perform (do homework).", example: "Let's make a plan and do it." },
@@ -1947,10 +2262,29 @@ const MODEL_OPTIONS = [
   "llama3.2:3b · Ollama",
   "mlx-community/Qwen3-8B-4bit · MLX"
 ];
-function renderModels() {
+async function renderModels() {
   const root = $("#runtime-list");
   root.innerHTML = "";
-  RUNTIMES.forEach(rt => {
+  let data = null;
+  if (API.mode) {
+    try { data = await API.get("/api/runtimes"); } catch (e) { toast(API.errText(e)); }
+    const dz = document.querySelector(".danger-zone");
+    if (dz) dz.style.display = "none";
+    const nb = document.querySelector("#screen-models .note-bar p");
+    if (nb) nb.innerHTML = "<strong>Live.</strong> Verba probes LM Studio (<kbd>localhost:1234</kbd>), Ollama (<kbd>localhost:11434</kbd>) and the local MLX/oMLX server, then assigns roles automatically. Start a runtime and rescan.";
+  }
+  const rts = API.mode && data
+    ? data.runtimes.map(function (r) {
+        return {
+          name: r.name, endpoint: r.endpoint, detected: r.status === "detected",
+          models: r.models.map(function (m) {
+            const det = (m.fmt || "") + (m.size_bytes ? " · " + (m.size_bytes / 1e9).toFixed(1) + " GB" : "");
+            return { id: m.id, det: det };
+          })
+        };
+      })
+    : RUNTIMES;
+  rts.forEach(rt => {
     const card = document.createElement("div");
     card.className = "card runtime-card";
     card.innerHTML =
@@ -1963,6 +2297,31 @@ function renderModels() {
       ).join("");
     root.appendChild(card);
   });
+  if (API.mode && data) {
+    const opts = [];
+    data.runtimes.filter(r => r.status === "detected").forEach(function (r) {
+      r.models.forEach(function (m) {
+        opts.push({ value: r.id + "|" + m.id, label: m.id + " · " + r.name, runtime: r.id, model: m.id });
+      });
+    });
+    [["role-tutor", "tutor"], ["role-judge", "judge"], ["role-generator", "generator"]].forEach(function (pair) {
+      const sel = pair[0], key = pair[1];
+      const s = $("#" + sel);
+      s.innerHTML = opts.map(o => '<option value="' + o.value + '">' + o.label + "</option>").join("");
+      const cur = (data.roles || {})[key];
+      const match = opts.find(o => cur && o.runtime === cur.runtime && o.model === cur.model);
+      s.value = match ? match.value : (opts[0] ? opts[0].value : "");
+      s.addEventListener("change", async function () {
+        const o = opts.find(x => x.value === s.value);
+        if (!o) return;
+        try {
+          await API.put("/api/roles", { role: key, runtime: o.runtime, model_id: o.model });
+          toast(key.charAt(0).toUpperCase() + key.slice(1) + " → " + o.label);
+        } catch (e) { toast(API.errText(e)); }
+      });
+    });
+    return;
+  }
   [["role-tutor", "tutor"], ["role-judge", "judge"], ["role-generator", "generator"]].forEach(([sel, key]) => {
     const s = $("#" + sel);
     s.innerHTML = MODEL_OPTIONS.map(o => '<option value="' + o + '">' + o + "</option>").join("");
@@ -1975,6 +2334,16 @@ function renderModels() {
     });
   });
 }
+$("#btn-rescan").addEventListener("click", async function () {
+  const btn = $("#btn-rescan");
+  btn.disabled = true;
+  try {
+    await API.post("/api/runtimes/scan");
+    await renderModels();
+    toast("Runtimes re-scanned.");
+  } catch (e) { toast(API.errText(e)); }
+  btn.disabled = false;
+});
 $("#btn-reset-demo").addEventListener("click", () => {
   try { localStorage.removeItem(LS_KEY); } catch (e) {}
   state = loadState();
@@ -1992,13 +2361,41 @@ $("#btn-reset-demo").addEventListener("click", () => {
 
 /* ─── Stats screen ──────────────────────────────────────────────────── */
 function dayKey(d) { return d.toISOString().slice(0, 10); }
-function renderStats() {
-  ensureDailyToday(state);
+async function renderStats() {
+  if (API.mode) {
+    try {
+      const res = await Promise.all([
+        API.get("/api/stats/overview"),
+        API.get("/api/stats/daily?days=14"),
+        API.get("/api/stats/errors"),
+        API.get("/api/stats/library"),
+        API.get("/api/review/queue"),
+        API.get("/api/profile")
+      ]);
+      const ov = res[0];
+      API._ov = ov;
+      state.xp = ov.xp;
+      state.streak = ov.streak;
+      state.daily = {};
+      res[1].forEach(function (d) { state.daily[d.day] = d; });
+      ensureDailyToday(state);
+      API._statsErrors = res[2];
+      API._statsLib = res[3];
+      API._dueCount = res[4].count;
+      API._profile = res[5];
+      state.goalTarget = parseInt(res[5].goal_target || "20", 10) || 20;
+      state.goalDone = parseInt(res[5].goal_done || "0", 10) || 0;
+    } catch (e) { toast(API.errText(e)); }
+  }
   const t = state.totals || { tasks: 0, correct: 0, lessons: 0, scenarios: 0 };
-  const acc = t.tasks ? Math.round((t.correct / t.tasks) * 100) + "%" : "—";
+  const acc = API.mode
+    ? ((API._ov && API._ov.accuracy != null) ? API._ov.accuracy + "%" : "—")
+    : (t.tasks ? Math.round((t.correct / t.tasks) * 100) + "%" : "—");
   const ov = $("#stats-overview");
   ov.innerHTML = "";
-  [["Total XP", state.xp.toLocaleString("en-US")], ["Day streak", state.streak], ["Missions done", state.completed.length], ["Accuracy", acc]].forEach(function (pair) {
+  [["Total XP", state.xp.toLocaleString("en-US")], ["Day streak", state.streak],
+   ["Missions done", API.mode ? ((API._ov && API._ov.missions_done) || 0) : state.completed.length],
+   ["Accuracy", acc]].forEach(function (pair) {
     const c = document.createElement("div");
     c.className = "scell";
     const v = document.createElement("span");
@@ -2038,7 +2435,11 @@ function renderStats() {
   });
 
   const byCat = {};
-  state.errors.forEach(e => { byCat[e.cat] = (byCat[e.cat] || 0) + 1; });
+  if (API.mode) {
+    API._statsErrors.forEach(function (x) { byCat[API.prettyCat(x.category)] = x.count; });
+  } else {
+    state.errors.forEach(e => { byCat[e.cat] = (byCat[e.cat] || 0) + 1; });
+  }
   const cats = Object.keys(byCat).sort((a, b) => byCat[b] - byCat[a]);
   const catBox = $("#stats-cats");
   if (!cats.length) {
@@ -2050,14 +2451,16 @@ function renderStats() {
     ).join("");
   }
 
-  const q = queue();
+  const q = API.mode ? { length: API._dueCount || 0 } : queue();
   const pct = Math.min(100, Math.round((state.goalDone / state.goalTarget) * 100));
   $("#stats-drills").innerHTML =
     '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Daily goal</span><span class="small od-nowrap">' + state.goalDone + " / " + state.goalTarget + '</span></div>' +
     '<div class="goal-bar"><div class="goal-fill" style="width:' + pct + '%"></div></div>' +
-    '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Cards retired</span><span class="small od-nowrap">' + state.srsDone.length + '</span></div>' +
+    '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Cards retired</span><span class="small od-nowrap">' + (API.mode ? ((API._statsLib && API._statsLib.srs_retired) || 0) : state.srsDone.length) + '</span></div>' +
     '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Due now</span><span class="small od-nowrap">' + q.length + '</span></div>' +
-    '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Tutor scenarios</span><span class="small od-nowrap">' + (t.scenarios || 0) + "</span></div>";
+    (API.mode
+      ? '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Missions in library</span><span class="small od-nowrap">' + ((API._statsLib && API._statsLib.missions_total) || 0) + "</span></div>"
+      : '<div class="cat-row" style="grid-template-columns:minmax(0,1fr) auto"><span class="small">Tutor scenarios</span><span class="small od-nowrap">' + (t.scenarios || 0) + "</span></div>");
 }
 
 /* ─── Onboarding & placement ────────────────────────────────────────── */
@@ -2111,6 +2514,7 @@ function renderOnboard() {
       "</div>";
     $("#ob-start").addEventListener("click", function () { ob.step = "quiz"; renderOnboard(); });
     $("#ob-skip").addEventListener("click", skipOnboarding);
+    if (API.mode) $("#ob-skip").hidden = true;
   } else if (ob.step === "quiz") {
     const q = PLACEMENT_QS[ob.qi];
     w.innerHTML =
@@ -2126,10 +2530,20 @@ function renderOnboard() {
         }).join("") +
       "</div>";
     w.querySelectorAll("#ob-choices .choice").forEach(function (b) {
-      b.addEventListener("click", function () {
+      b.addEventListener("click", async function () {
         if (Number(b.dataset.i) === q.answer) ob.correct += 1;
         ob.qi += 1;
-        if (ob.qi >= PLACEMENT_QS.length) { ob.step = "result"; ob.level = levelFromScore(ob.correct); }
+        if (ob.qi >= PLACEMENT_QS.length) {
+          ob.step = "result";
+          if (API.mode) {
+            try {
+              const r = await API.post("/api/onboarding/placement", { correct: ob.correct, questions: PLACEMENT_QS.length });
+              ob.level = r.level;
+            } catch (e) { ob.level = levelFromScore(ob.correct); }
+          } else {
+            ob.level = levelFromScore(ob.correct);
+          }
+        }
         renderOnboard();
       });
     });
@@ -2160,17 +2574,25 @@ function renderOnboard() {
         $("#ob-go").disabled = false;
       });
     });
-    $("#ob-go").addEventListener("click", function () { ob.step = "gen"; renderOnboard(); });
+    $("#ob-go").addEventListener("click", async function () {
+      if (API.mode && ob.goal) {
+        try { await API.post("/api/onboarding/goal", { target: ob.goal }); } catch (e) {}
+      }
+      ob.step = "gen";
+      renderOnboard();
+    });
   } else if (ob.step === "gen") {
     w.innerHTML =
       '<div class="od-stack" style="--od-gap:8px">' + obHead("Almost there", "Generating your English path…") + "</div>" +
-      '<p class="small">Simulated AI generation — the real app builds this with your local model.</p>' +
+      (API.mode
+        ? '<p class="small">Your path unlocks from the placement — missions generate on first open with your local model.</p>'
+        : '<p class="small">Simulated AI generation — the real app builds this with your local model.</p>') +
       '<div class="card" style="display:grid; gap:12px">' +
         '<div class="skeleton" style="height:20px; width:70%"></div>' +
         '<div class="skeleton" style="height:20px; width:45%"></div>' +
         '<div class="skeleton" style="height:20px; width:60%"></div>' +
       "</div>";
-    setTimeout(applyPlacement, 1200);
+    setTimeout(applyPlacement, API.mode ? 700 : 1200);
   }
   const f = w.querySelector("[data-ob-focus]");
   if (f) f.focus({ preventScroll: true });
@@ -2189,7 +2611,22 @@ function skipOnboarding() {
   $("#onboard").hidden = true;
   toast("Demo path kept — reset demo data to retake the placement.");
 }
-function applyPlacement() {
+async function applyPlacement() {
+  if (API.mode) {
+    state.onboarded = true;
+    state.goalTarget = ob.goal || state.goalTarget;
+    state.goalDone = 0;
+    try { await API.refreshPath(); } catch (e) {}
+    ob = null;
+    $("#onboard").hidden = true;
+    applyTheme();
+    updateStats();
+    renderPath();
+    renderReview();
+    showScreen("path");
+    toast("Path ready — starting at " + (state.level || "A1") + ".");
+    return;
+  }
   const map = PLACEMENT_MAP[ob.level];
   state.completed = map.done.slice();
   state.current = map.cur;
@@ -2228,19 +2665,30 @@ function applyTheme() {
 }
 function toggleTheme() {
   state.theme = currentTheme() === "dark" ? "light" : "dark";
-  save();
+  if (API.mode) { try { localStorage.setItem("verba-theme", state.theme); } catch (e) {} }
+  else save();
   applyTheme();
 }
 document.querySelectorAll(".theme-toggle").forEach(b => b.addEventListener("click", toggleTheme));
 
 /* ─── Boot ──────────────────────────────────────────────────────────── */
-applyTheme();
-updateStats();
-renderPath();
-renderReview();
-renderModels();
-ensureChatStarted();
-if (!state.onboarded) startOnboarding();
+(async function boot() {
+  await API.detect();
+  if (API.mode) {
+    try { await API.hydrate(); }
+    catch (e) { toast("Backend reachable but hydration failed: " + API.errText(e)); }
+    API.applyModeBadges();
+    $("#chat-finish").hidden = false;
+    $("#btn-rescan").hidden = false;
+  }
+  applyTheme();
+  updateStats();
+  renderPath();
+  renderReview();
+  renderModels();
+  ensureChatStarted();
+  if (!state.onboarded) startOnboarding();
+})();
 </script>
 </body>
 </html>
