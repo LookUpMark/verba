@@ -11,9 +11,9 @@ dist/
 .verba/
 
 # Desktop build artifacts
-verba/desktop/src-tauri/target/
-verba/desktop/src-tauri/binaries/
-verba/desktop/src-tauri/gen/
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/
+desktop/src-tauri/gen/
 release/
 
 # OS / editors / Open Design workspace internals
@@ -29,3 +29,4 @@ screenshot-*.png
 # Local caches
 .pytest_cache/
 .ruff_cache/
+.zcode/

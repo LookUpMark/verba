@@ -1,10 +1,10 @@
 """Build the Verba sidecar binary for the current platform with PyInstaller.
 
-Output: verba/desktop/src-tauri/binaries/verba-server-<target-triple>[.exe]
+Output: desktop/src-tauri/binaries/verba-server-<target-triple>[.exe]
 The name matches what Tauri expects for `bundle.externalBin` (it appends the
 target triple at bundle time).
 
-Prerequisites: `pip install -e ./verba pyinstaller` from the repo root.
+Prerequisites: `pip install -e . pyinstaller` from the repo root.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def main() -> int:
         str(HERE / "build"),
         "--specpath",
         str(HERE / "build"),
-        # The verba package must be importable (pip install -e ./verba).
+        # The verba package must be importable (pip install -e .).
         "--paths",
         str(HERE.parent / "src"),
         str(HERE / "sidecar_entry.py"),

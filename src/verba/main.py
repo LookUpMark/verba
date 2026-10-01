@@ -64,7 +64,7 @@ for router in (
     app.include_router(router, prefix="/api")
 
 # The validated UI prototype ships with the backend: same product, one file.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _INDEX = _REPO_ROOT / "index.html"
 
 

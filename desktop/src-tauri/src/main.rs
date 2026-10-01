@@ -1,6 +1,6 @@
 // Verba desktop shell: spawn the FastAPI sidecar, wait for its readiness
 // line on stdout AND for the TCP port to answer, then open the window.
-// The sidecar entrypoint (verba/desktop/sidecar_entry.py) prints
+// The sidecar entrypoint (desktop/sidecar_entry.py) prints
 // "VERBA_READY port=<n>" before uvicorn binds, so stdout alone is not enough.
 //
 // Lifecycle patterns ported from the Osusume reference app: single-instance

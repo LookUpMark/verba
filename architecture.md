@@ -374,30 +374,30 @@ Separate prompt, separate model slot, no persona. Input: the last tutor turn, th
 ## 10. Project structure
 
 ```
-verba/
-├─ src/
-│  ├─ main.py                 # FastAPI app, static SPA mount, lifespan (discovery, DB init)
+repo root (verba)/
+├─ index.html                 # validated UI prototype — served at / by the backend
+├─ pyproject.toml             # package + `verba` console script
+├─ src/verba/
+│  ├─ main.py                 # FastAPI app, UI at /, lifespan (DB init, seed, discovery)
 │  ├─ config.py               # paths, ports, defaults
-│  ├─ db.py                   # engine, session, migrations
-│  ├─ models/                 # SQLModel tables (§4)
+│  ├─ db.py                   # engine, session
+│  ├─ models.py               # SQLModel tables (§4)
 │  ├─ providers/
 │  │  ├─ base.py              # LLMProvider protocol, role resolution
 │  │  ├─ lmstudio.py  ollama.py  mlx.py  hf_local.py
-│  │  └─ discovery.py         # startup probes, download guidance
+│  │  └─ discovery.py         # startup probes
 │  ├─ pipelines/
-│  │  ├─ curriculum.py        # §7.1
+│  │  ├─ curriculum.py        # §7.1 skeleton
 │  │  ├─ tasks.py             # §7.2 + payload schemas per kind
 │  │  ├─ judge.py             # §7.3 (+ rules.py: deterministic pre-pass)
-│  │  └─ adaptive.py          # §7.4
+│  │  └─ prompts.py           # tutor vs judge system prompts (kept separate)
 │  ├─ services/
-│  │  ├─ attempts.py  srs.py (FSRS)  voice.py (whisper.cpp, Piper)
+│  │  └─ srs.py               # FSRS-lite
 │  ├─ api/
-│  │  ├─ routes_path.py  routes_chat.py  routes_review.py
-│  │  ├─ routes_stats.py  routes_runtimes.py  routes_voice.py
-│  └─ seed/                   # hand-authored task sets (from the prototype), scenarios, SRS seeds
-├─ web/                       # React SPA (Vite) — the prototype's design system, rebuilt
-├─ desktop/                   # Tauri v2 shell, sidecar config
-└─ verba.db                   # created at first run
+│  │  ├─ routes_path.py  routes_chat.py  routes_lessons.py
+│  │  └─ routes_review.py  routes_stats.py
+│  └─ seed/                   # curriculum skeleton, scenarios, SRS seeds
+└─ desktop/                   # Tauri v2 shell (src-tauri/), sidecar_entry.py, build-sidecar.py
 ```
 
 ## 11. Roadmap

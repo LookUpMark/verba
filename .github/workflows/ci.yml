@@ -21,13 +21,13 @@ jobs:
           cache: pip
 
       - name: Install backend + tooling
-        run: pip install -e ./verba ruff pyinstaller
+        run: pip install -e . ruff pyinstaller
 
       - name: Lint
-        run: ruff check verba/src
+        run: ruff check src
 
       - name: Sidecar smoke build
-        run: python verba/desktop/build-sidecar.py
+        run: python desktop/build-sidecar.py
 
   desktop:
     runs-on: ${{ matrix.os }}
@@ -47,7 +47,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: verba/desktop/src-tauri
+          workspaces: desktop/src-tauri
 
       - name: Install Linux webview deps
         if: runner.os == 'Linux'
@@ -58,8 +58,8 @@ jobs:
       # tauri-build validates bundle.externalBin even for cargo check:
       # the sidecar binary must exist before the shell compiles.
       - name: Build sidecar (PyInstaller)
-        run: pip install -e ./verba "pyinstaller==6.22.3" && python verba/desktop/build-sidecar.py
+        run: pip install -e . "pyinstaller==6.22.3" && python desktop/build-sidecar.py
 
       - name: cargo check
-        working-directory: verba/desktop/src-tauri
+        working-directory: desktop/src-tauri
         run: cargo check

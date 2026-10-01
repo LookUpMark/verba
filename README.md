@@ -1,14 +1,13 @@
 # Verba backend — milestone 1
 
 LLM provider layer, runtime discovery and the Models/Profile endpoints.
-Spec: `../architecture.md` (§5 provider layer, §6 endpoints, §4 data model).
+Spec: `architecture.md` (§5 provider layer, §6 endpoints, §4 data model).
 Model selection is **provisional**: no model id is hardcoded — roles resolve
 to whatever the local runtimes actually expose.
 
 ## Run
 
 ```sh
-cd verba
 python3.12 -m venv .venv && source .venv/bin/activate    # or: uv venv
 pip install -e .
 verba                       # = uvicorn verba.main:app --host 127.0.0.1 --port 8000
@@ -47,14 +46,14 @@ Prerequisites: Rust (stable), Python 3.12, and on Linux
 
 ```sh
 # 1. sidecar binary for the current platform
-pip install -e ./verba pyinstaller
-python verba/desktop/build-sidecar.py     # -> desktop/src-tauri/binaries/verba-server-<triple>
+pip install -e . pyinstaller
+python desktop/build-sidecar.py           # -> desktop/src-tauri/binaries/verba-server-<triple>
 
 # 2. app icons (one-time, requires a source PNG)
 cargo tauri icon path/to/app-icon.png     # writes desktop/src-tauri/icons/
 
 # 3. dev window (expects the sidecar already built)
-cargo run                                  # in verba/desktop/src-tauri
+cargo run                                  # in desktop/src-tauri
 
 # 4. full installers for this OS
 cargo tauri build                          # dmg/app | msi/nsis | deb/appimage
@@ -65,7 +64,7 @@ CI/CD (`.github/workflows/`):
 - **CI** — `ci.yml` on push/PR: `ruff check`, sidecar smoke build, `cargo check`
   on the three OS matrix rows.
 - **Release** — `release.yml` on tag `v*`: reads the version from
-  `verba/pyproject.toml`, builds sidecar + installers on
+  `pyproject.toml`, builds sidecar + installers on
   macOS (arm64 + x86_64), Windows and Linux, attaches dmg/msi/exe/deb/AppImage
   to a draft GitHub Release, then publishes it.
 
