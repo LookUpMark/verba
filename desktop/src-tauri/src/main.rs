@@ -1,6 +1,6 @@
 // Verba desktop shell: spawn the FastAPI sidecar, wait for its readiness
-// line on stdout AND for the TCP port to answer, then open the window.
-// The sidecar entrypoint (desktop/sidecar_entry.py) prints
+// line on stdout AND for /api/health to answer like Verba, then open the
+// window. The sidecar entrypoint (desktop/sidecar_entry.py) prints
 // "VERBA_READY port=<n>" before uvicorn binds, so stdout alone is not enough.
 //
 // Lifecycle patterns ported from the Osusume reference app: single-instance
@@ -12,7 +12,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -33,9 +33,30 @@ fn request_shutdown(port: u16) {
     }
 }
 
+/// Any local process can hold the port; only Verba answers like Verba.
+/// The readiness poll checks the payload, not just the TCP handshake.
+fn health_ok(port: u16) -> bool {
+    if let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+        if stream
+            .write_all(
+                format!("GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes(),
+            )
+            .is_ok()
+        {
+            let mut buf = Vec::new();
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = stream.read_to_end(&mut buf);
+            return String::from_utf8_lossy(&buf).contains("\"status\":\"ok\"");
+        }
+    }
+    false
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.unminimize();
@@ -63,10 +84,15 @@ fn main() {
                     }
                 }
 
-                // stdout prints before uvicorn binds: poll the port (up to 15s)
-                let port_num: u16 = port.parse().unwrap_or(8000);
+                // stdout prints before uvicorn binds: poll /api/health, not
+                // just the TCP port (up to 15s). No silent fallback: an
+                // unparsable port is a hard failure, not port 8000.
+                let port_num: u16 = match port.parse() {
+                    Ok(p) => p,
+                    Err(_) => panic!("sidecar reported an invalid port: {port}"),
+                };
                 for _ in 0..50 {
-                    if std::net::TcpStream::connect(("127.0.0.1", port_num)).is_ok() {
+                    if health_ok(port_num) {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(300)).await;

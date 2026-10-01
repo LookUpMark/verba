@@ -21,10 +21,17 @@ jobs:
           cache: pip
 
       - name: Install backend + tooling
-        run: pip install -e . ruff pyinstaller
+        # Pinned toolchain via constraints: same versions as the desktop job
+        # and the release, so the lint/build verdict is reproducible.
+        run: pip install -e . -c constraints.txt ruff pyinstaller pytest
 
       - name: Lint
-        run: ruff check src
+        run: ruff check src tests
+
+      - name: Tests
+        env:
+          VERBA_LLM_SPAWN: "0"
+        run: python -m pytest -q
 
       - name: Sidecar smoke build
         run: python desktop/build-sidecar.py
@@ -62,4 +69,4 @@ jobs:
 
       - name: cargo check
         working-directory: desktop/src-tauri
-        run: cargo check
+        run: cargo check --locked
