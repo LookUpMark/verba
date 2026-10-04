@@ -28,7 +28,9 @@ _CLOSE = "</think>"
 # TransportError and each attempt can already wait up to 120s, so the whole
 # sequence is capped by a monotonic deadline instead of the delay ladder alone.
 _RETRY_DELAYS = (1.0, 3.0, 7.0, 15.0, 30.0)
-_RETRY_DEADLINE_S = 90.0
+# Cold model loads on a local server can refuse/hold connections for a couple
+# of minutes — the deadline must outlast the load, not just the warm-up.
+_RETRY_DEADLINE_S = 180.0
 
 
 def _partial_tag_suffix(text: str, tag: str) -> int:

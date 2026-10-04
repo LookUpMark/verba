@@ -54,6 +54,11 @@ async def discover(session: Session) -> dict[str, Any]:
             record = session.get(RuntimeRecord, probe.runtime_id)
             if record is None:
                 record = RuntimeRecord(id=probe.runtime_id, name=probe.name, endpoint=probe.base_url)
+            # The endpoint must follow the current probe config (env changes,
+            # oMLX port changes): a stale endpoint from an older run would
+            # keep the runtime "detected" while dialing a dead address.
+            record.name = probe.name
+            record.endpoint = probe.base_url
             record.status = "detected" if models else "missing"
             record.models = json.dumps([{"id": m.id, "fmt": m.fmt, "size_bytes": m.size_bytes} for m in models])
             session.add(record)

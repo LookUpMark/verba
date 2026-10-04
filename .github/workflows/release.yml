@@ -49,6 +49,9 @@ jobs:
           draft: true
           name: Verba ${{ steps.ver.outputs.version }}
           tag_name: ${{ github.ref_name }}
+          # Hand-written narrative notes (maintained per release in the repo),
+          # with the auto changelog appended by the action.
+          body_path: RELEASE_NOTES.md
           generate_release_notes: true
 
   build:

@@ -1897,7 +1897,7 @@ function diagnosisCard(d) {
   }
   card.innerHTML =
     '<div class="dx-head"><span class="score-chip ' + cls + '">' + d.score + "/100</span>" +
-    '<span class="badge badge-muted"><span class="badge-dot"></span>' + (API.mode ? "Local judge · live" : "Rule-based judge · prototype") + "</span></div>'" + rows;
+    '<span class="badge badge-muted"><span class="badge-dot"></span>' + (API.mode ? "Local judge · live" : "Rule-based judge · prototype") + "</span></div>" + rows;
   return card;
 }
 function judge(text) {

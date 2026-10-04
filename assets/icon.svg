@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Verba app icon: a speech bubble holding the V of "Verba", with an AI
+       spark beside it — the tutor you talk to. Outline glyph in Verba's coral
+       on the warm near-black ground of the UI, Apple-style glyph on a
+       squircle. Gradients use userSpaceOnUse: objectBoundingBox gradients
+       silently fail on straight lines (zero-area bbox). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#23211c"/>
+      <stop offset="1" stop-color="#151412"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="0" y1="196" x2="0" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e2906b"/>
+      <stop offset="1" stop-color="#d97757"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <g fill="none" stroke="url(#stroke)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round">
+    <!-- speech bubble, tail bottom-left -->
+    <path d="M 336 296 H 688 Q 776 296 776 384 V 544 Q 776 632 688 632 H 480 L 302 772 L 390 632 H 336 Q 248 632 248 544 V 384 Q 248 296 336 296 Z"/>
+    <!-- the V of Verba -->
+    <path d="M 392 380 L 512 552 L 632 380"/>
+  </g>
+  <!-- AI spark -->
+  <path d="M 812 196 L 826 240 L 870 254 L 826 268 L 812 312 L 798 268 L 754 254 L 798 240 Z" fill="url(#stroke)"/>
+</svg>
