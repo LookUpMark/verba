@@ -21,7 +21,15 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from . import __version__
-from .api import routes_chat, routes_lessons, routes_path, routes_review, routes_stats
+from .api import (
+    routes_chat,
+    routes_lessons,
+    routes_path,
+    routes_review,
+    routes_runtime,
+    routes_stats,
+    routes_voice,
+)
 from .config import settings
 from .db import engine, get_session, init_db
 from .models import ProfileEntry, RoleAssignment, RuntimeRecord
@@ -121,6 +129,8 @@ for router in (
     routes_lessons.router,
     routes_review.router,
     routes_stats.router,
+    routes_runtime.router,
+    routes_voice.router,
 ):
     app.include_router(router, prefix="/api")
 

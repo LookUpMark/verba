@@ -61,11 +61,13 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          # macOS arm64 only for v0.1.0: PyInstaller cannot cross-compile the
-          # sidecar, and the hosted runners are arm64. Intel macOS needs a
-          # Rosetta x86_64 sidecar build — planned for v0.2.
+          # Each macOS build runs on its native runner: macos-latest (arm64)
+          # and macos-13 (the last Intel x86_64 runner) — the PyInstaller
+          # sidecar cannot cross-compile, so no Rosetta tricks are needed.
           - os: macos-latest
             args: --target aarch64-apple-darwin
+          - os: macos-13
+            args: --target x86_64-apple-darwin
           - os: windows-latest
             args: ""
           - os: ubuntu-latest
@@ -97,7 +99,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.os == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.settings.os == 'macos-latest' && 'aarch64-apple-darwin' || (matrix.settings.os == 'macos-13' && 'x86_64-apple-darwin' || '') }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -110,6 +112,12 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       # Pinned PyInstaller: reproducible sidecar builds (osusume pattern).
+      - name: Build whisper.cpp (bundled STT)
+        run: |
+          git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp desktop/build/whisper-src
+          cmake -S desktop/build/whisper-src -B desktop/build/whisper-build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DGGML_BUILD_TESTS=OFF
+          cmake --build desktop/build/whisper-build --config Release --target whisper-cli
+
       - name: Build sidecar (PyInstaller)
         run: pip install -e . -c constraints.txt pytest && python -m pytest -q && pip install "pyinstaller==6.22.3" && python desktop/build-sidecar.py
 

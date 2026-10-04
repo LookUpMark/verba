@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,7 +51,15 @@ def get_path(session: Session = Depends(get_session)) -> dict[str, Any]:
                     current_assigned = True
                 else:
                     state = "locked"
-                mission_out.append({"id": m.id, "title": m.title, "state": state, "generated": m.generated})
+                mission_out.append(
+                    {
+                        "id": m.id,
+                        "title": m.title,
+                        "state": state,
+                        "generated": m.generated,
+                        "target_categories": json.loads(m.target_categories) if m.target_categories else [],
+                    }
+                )
             unit_out.append({"id": unit.id, "title": unit.title, "missions": mission_out})
         tree.append({"id": level.id, "cefr": level.cefr, "title": level.title, "units": unit_out})
     current = next((m["id"] for u in tree for uu in u["units"] for m in uu["missions"] if m["state"] == "current"), None)

@@ -9,6 +9,9 @@
 /* ─────────────────────────────────────────────────────────────────────────
    Design System "Claude (Anthropic)" — tokens pasted verbatim (tokens.css)
    ───────────────────────────────────────────────────────────────────────── */
+/* The hidden attribute must beat any component display rule. */
+[hidden] { display: none !important; }
+
 :root {
   --bg: #f5f4ed;
   --surface: #faf9f5;
@@ -664,6 +667,7 @@ kbd {
       </div>
     </div>
     <p class="proto-note">Prototype v0.1 · AI flows are simulated · data stays in your browser</p>
+    <button class="btn btn-primary btn-sm" id="update-chip" hidden style="margin:12px 16px 0; width:calc(100% - 32px)"></button>
   </aside>
 
   <main class="main">
@@ -815,6 +819,16 @@ kbd {
           <label for="role-generator">Curriculum &amp; task generator</label>
           <select class="tutor-input" id="role-generator"></select>
         </div>
+      </div>
+      <div class="card" id="setup-card" hidden>
+        <h2>Runtime setup</h2>
+        <p class="small">Start a local server and get a model on this machine — no terminal needed.</p>
+        <div id="setup-list" class="od-stack" style="--od-gap:16px; margin-top:16px"></div>
+      </div>
+      <div class="card" id="voice-card" hidden>
+        <h2>Voice</h2>
+        <p class="small">Speaking answers can be recorded and transcribed by whisper.cpp running on this machine. The acoustic model (~148&nbsp;MB, English) downloads once, on your explicit action — everything stays local afterwards.</p>
+        <div id="voice-state" class="od-stack" style="--od-gap:8px; margin-top:16px"></div>
       </div>
       <div class="card" style="display:grid; gap:16px">
         <h2>Download guide</h2>
@@ -1449,6 +1463,95 @@ function renderTask() {
       grade(t, built === t.words.join(" "), t.words.join(" "), built);
     });
   } else if (t.kind === "speaking") {
+    if (API.mode) {
+      // API mode: record locally and transcribe with the bundled whisper.cpp
+      // (§9); the server grades the transcript. Typing stays as the fallback.
+      let heard = "";
+      function setHeard(text) {
+        heard = text;
+        lesson.lastHeard = text;
+        const words = clean(t.say), pool = clean(text);
+        const chips = words.map(w => {
+          const idx = pool.indexOf(w);
+          if (idx > -1) { pool.splice(idx, 1); return '<span class="wchip">' + w + "</span>"; }
+          return '<span class="wchip miss">' + w + "</span>";
+        });
+        heardBox.hidden = false;
+        heardBox.innerHTML =
+          '<span class="h-label">We heard</span><span class="h-text"></span>' +
+          '<div class="word-chips">' + chips.join("") + "</div>";
+        heardBox.querySelector(".h-text").textContent = text;
+        check.disabled = false;
+      }
+      const mic = document.createElement("button");
+      mic.className = "mic-btn";
+      mic.setAttribute("aria-label", "Tap to record");
+      mic.innerHTML = icon("mic");
+      const hint = document.createElement("p");
+      hint.className = "mic-hint";
+      hint.textContent = "Tap the mic, read the sentence aloud, tap again to stop.";
+      const heardBox = document.createElement("div");
+      heardBox.className = "heard-box";
+      heardBox.hidden = true;
+      const typeInput = document.createElement("input");
+      typeInput.className = "tutor-input";
+      typeInput.placeholder = "Type the sentence…";
+      typeInput.hidden = true;
+      typeInput.setAttribute("aria-label", "Type the sentence instead");
+      typeInput.addEventListener("input", () => { if (typeInput.value.trim()) setHeard(typeInput.value.trim()); });
+      const typeBtn = document.createElement("button");
+      typeBtn.className = "btn btn-ghost btn-sm";
+      typeBtn.textContent = "Type instead";
+      typeBtn.addEventListener("click", () => { typeInput.hidden = false; typeInput.focus(); });
+      const note = document.createElement("p");
+      note.className = "small";
+      note.textContent = "Transcribed locally with whisper.cpp — the audio never leaves this machine.";
+      let recording = false;
+      mic.addEventListener("click", async () => {
+        if (!recording) {
+          try {
+            await Voice.start();
+            recording = true;
+            mic.classList.add("listening");
+            mic.setAttribute("aria-label", "Recording — tap to stop");
+            hint.textContent = "Listening… read the sentence aloud.";
+          } catch (e) { toast("Microphone unavailable — type instead."); }
+          return;
+        }
+        recording = false;
+        mic.classList.remove("listening");
+        hint.textContent = "Transcribing…";
+        const wav = Voice.stop();
+        try {
+          const text = await apiTranscribeBlob(wav);
+          if (text) setHeard(text); else { hint.textContent = "Nothing heard — try again or type instead."; check.disabled = true; }
+        } catch (e) {
+          hint.textContent = e.status === 503
+            ? "Voice is not enabled yet — enable it from the Models screen, or type instead."
+            : "Transcription failed — type instead.";
+          if (e.status === 503) apiMaybeModels(e);
+        }
+      });
+      zoneSpeak.appendChild(mic);
+      zoneSpeak.appendChild(hint);
+      zoneSpeak.appendChild(heardBox);
+      zoneSpeak.appendChild(typeBtn);
+      zoneSpeak.appendChild(typeInput);
+      zoneSpeak.appendChild(note);
+      check.addEventListener("click", () => {
+        const ratio = (function () {
+          const tw = clean(t.say), hw = clean(heard);
+          if (!tw.length) return 1;
+          const pool = hw.slice();
+          let m = 0;
+          tw.forEach(w => { const i = pool.indexOf(w); if (i > -1) { pool.splice(i, 1); m += 1; } });
+          return m / tw.length;
+        })();
+        check.disabled = true;
+        grade(t, ratio >= 0.8, t.say, heard);
+      });
+      return;
+    }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const zoneSpeak = document.createElement("div");
     zoneSpeak.className = "speak-zone";
@@ -2304,6 +2407,8 @@ async function renderModels() {
     if (dz) dz.style.display = "none";
     const nb = document.querySelector("#screen-models .note-bar p");
     if (nb) nb.innerHTML = "<strong>Live.</strong> Verba probes LM Studio (<kbd>localhost:1234</kbd>), Ollama (<kbd>localhost:11434</kbd>) and the local MLX/oMLX server, then assigns roles automatically. Start a runtime and rescan.";
+    apiRenderSetup();
+    apiRenderVoice();
   }
   const rts = API.mode && data
     ? data.runtimes.map(function (r) {
@@ -2378,10 +2483,9 @@ $("#btn-rescan").addEventListener("click", async function () {
 });
 /* In-app update check — only inside the Tauri shell (withGlobalTauri exposes
    the updater plugin the shell registers; the browser fallback hides the
-   button). This is the app's single user-initiated network call. */
-$("#btn-updates").addEventListener("click", async function () {
-  const btn = $("#btn-updates");
-  btn.disabled = true;
+   button). The boot pass checks silently once and surfaces a chip; the
+   Models button stays the manual entry point. */
+async function installUpdate() {
   try {
     const update = await window.__TAURI__.updater.check();
     if (!update) {
@@ -2394,10 +2498,172 @@ $("#btn-updates").addEventListener("click", async function () {
     await window.__TAURI__.process.relaunch();
   } catch (e) {
     toast("Update check failed: " + (e && e.message ? e.message : String(e)));
-  } finally {
-    btn.disabled = false;
   }
+}
+$("#btn-updates").addEventListener("click", async function () {
+  const btn = $("#btn-updates");
+  btn.disabled = true;
+  await installUpdate();
+  btn.disabled = false;
 });
+async function bootUpdateCheck() {
+  if (!(window.__TAURI__ && window.__TAURI__.updater)) return;
+  try {
+    const update = await window.__TAURI__.updater.check();
+    if (!update) return;
+    const chip = $("#update-chip");
+    chip.hidden = false;
+    chip.innerHTML = icon("arrow") + " Update " + update.version + " available — install";
+    chip.addEventListener("click", installUpdate);
+  } catch (e) { /* offline or rate-limited: the manual button remains */ }
+}
+/* Local speech recording (§9): capture mono PCM, resample to 16 kHz and
+   hand the backend a WAV — whisper-cli consumes it as-is. */
+const Voice = {
+  rec: null,
+  async start() {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    const chunks = [];
+    proc.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    src.connect(proc);
+    proc.connect(ctx.destination);
+    this.rec = { stream, ctx, proc, chunks, rate: ctx.sampleRate };
+  },
+  stop() {
+    if (!this.rec) return null;
+    const { stream, ctx, proc, chunks, rate } = this.rec;
+    try { proc.disconnect(); stream.getTracks().forEach(t => t.stop()); ctx.close(); } catch (e) {}
+    this.rec = null;
+    const total = chunks.reduce((a, c) => a + c.length, 0);
+    const data = new Float32Array(total);
+    let off = 0;
+    chunks.forEach(c => { data.set(c, off); off += c.length; });
+    const target = 16000, ratio = rate / target, outLen = Math.floor(total / ratio);
+    const res = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const pos = i * ratio, i0 = Math.floor(pos), frac = pos - i0;
+      const a = data[i0] || 0, b = data[i0 + 1] || a;
+      res[i] = a + (b - a) * frac;
+    }
+    const buf = new ArrayBuffer(44 + outLen * 2), view = new DataView(buf);
+    const ws = (o, s) => { for (let i = 0; i < s.length; i++) view.setUint8(o + i, s.charCodeAt(i)); };
+    ws(0, "RIFF"); view.setUint32(4, 36 + outLen * 2, true); ws(8, "WAVE"); ws(12, "fmt ");
+    view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+    view.setUint32(24, target, true); view.setUint32(28, target * 2, true); view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true); ws(36, "data"); view.setUint32(40, outLen * 2, true);
+    for (let i = 0; i < outLen; i++) {
+      const s = Math.max(-1, Math.min(1, res[i]));
+      view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([buf], { type: "audio/wav" });
+  }
+};
+async function apiTranscribeBlob(blob) {
+  const r = await fetch("/api/voice/transcribe", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.detail || "transcription failed"); e.status = r.status; throw e; }
+  return j.text || "";
+}
+/* Runtime setup card (Models): state + start/pull actions. */
+async function apiRenderSetup() {
+  const card = $("#setup-card"), list = $("#setup-list");
+  card.hidden = false;
+  list.innerHTML = '<div class="skeleton" style="height:56px"></div>';
+  let data;
+  try { data = await API.get("/api/runtime/setup"); }
+  catch (e) { list.innerHTML = '<p class="small">' + API.errText(e) + "</p>"; return; }
+  list.innerHTML = "";
+  Object.values(data).forEach(rt => {
+    const row = document.createElement("div");
+    row.className = "od-stack"; row.style.setProperty("--od-gap", "8px");
+    const actions = document.createElement("div");
+    actions.className = "od-row"; actions.style.setProperty("--od-gap", "8px");
+    const mkBtn = (label, fn) => {
+      const b = document.createElement("button");
+      b.className = "btn btn-secondary btn-sm";
+      b.textContent = label;
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try { await fn(); } catch (e) { toast(API.errText(e)); }
+        b.disabled = false;
+      });
+      return b;
+    };
+    if (rt.id === "ollama" && rt.cli) {
+      if (!rt.server_up) actions.appendChild(mkBtn("Start Ollama", async () => {
+        const r = await API.post("/api/runtime/ollama/start");
+        toast(r.status === "up" ? "Ollama is running." : "Starting Ollama…");
+        await apiRenderSetup();
+        await renderModels();
+      }));
+      else actions.appendChild(mkBtn("Pull " + rt.suggested_model + " (~5 GB)", async () => {
+        const j = await API.post("/api/runtime/ollama/pull", { model: rt.suggested_model });
+        const bar = document.createElement("div");
+        bar.className = "goal-bar"; bar.style.marginTop = "8px";
+        const fill = document.createElement("div"); fill.className = "goal-fill"; fill.style.width = "0%";
+        bar.appendChild(fill);
+        row.appendChild(bar);
+        for (;;) {
+          const s = await API.get("/api/runtime/ollama/pull/" + j.job_id);
+          fill.style.width = s.percent + "%";
+          if (s.status === "success") { toast("Model " + s.model + " ready."); break; }
+          if (s.status === "error") { toast(s.error || "Pull failed."); break; }
+          await new Promise(res => setTimeout(res, 1500));
+        }
+        await renderModels();
+      }));
+    }
+    if (rt.id === "lmstudio" && rt.cli && !rt.server_up) {
+      actions.appendChild(mkBtn("Start LM Studio server", async () => {
+        const r = await API.post("/api/runtime/lmstudio/start");
+        toast(r.status === "up" ? "LM Studio server is running." : "Starting LM Studio server…");
+        await renderModels();
+      }));
+    }
+    row.innerHTML =
+      '<div class="od-row" style="--od-gap:8px">' +
+        '<span class="badge ' + (rt.server_up ? "badge-success" : "badge-muted") + '"><span class="badge-dot"></span>' + (rt.server_up ? "Running" : "Not running") + "</span>" +
+        '<span class="od-fill"><strong>' + rt.name + "</strong>" + (rt.id === "ollama" && !rt.cli ? " · CLI not found" : "") + "</span>" +
+      "</div>" +
+      '<p class="small">' + rt.hint + "</p>";
+    if (actions.children.length) row.appendChild(actions);
+    list.appendChild(row);
+  });
+}
+/* Voice card (Models): state + one-time model download. */
+async function apiRenderVoice() {
+  const card = $("#voice-card"), box = $("#voice-state");
+  card.hidden = false;
+  box.innerHTML = '<div class="skeleton" style="height:32px"></div>';
+  let st;
+  try { st = await API.get("/api/voice/state"); }
+  catch (e) { box.innerHTML = '<p class="small">' + API.errText(e) + "</p>"; return; }
+  if (!st.binary) { box.innerHTML = '<p class="small">This build has no bundled speech recognition.</p>'; return; }
+  if (st.status === "ready") {
+    box.innerHTML = '<p class="small"><strong>Voice ready.</strong> Recording a speaking answer transcribes it locally with whisper.cpp — nothing leaves the machine.</p>';
+    return;
+  }
+  if (st.status === "downloading") {
+    box.innerHTML = '<div class="goal-bar"><div class="goal-fill" style="width:' + st.percent + '%"></div></div><p class="small">Downloading the acoustic model… ' + st.percent + "%</p>";
+    setTimeout(apiRenderVoice, 1200);
+    return;
+  }
+  const btn = document.createElement("button");
+  btn.className = "btn btn-secondary btn-sm";
+  btn.innerHTML = icon("mic") + " Enable voice (one-time ~148 MB download)";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      await API.post("/api/voice/enable");
+      await apiRenderVoice();
+    } catch (e) { toast(API.errText(e)); btn.disabled = false; }
+  });
+  box.innerHTML = st.error ? '<p class="small">' + st.error + "</p>" : "";
+  box.appendChild(btn);
+}
 $("#btn-reset-demo").addEventListener("click", () => {
   try { localStorage.removeItem(LS_KEY); } catch (e) {}
   state = loadState();
@@ -2735,6 +3001,7 @@ document.querySelectorAll(".theme-toggle").forEach(b => b.addEventListener("clic
     $("#chat-finish").hidden = false;
     $("#btn-rescan").hidden = false;
     if (window.__TAURI__ && window.__TAURI__.updater) $("#btn-updates").hidden = false;
+    bootUpdateCheck();
   }
   applyTheme();
   updateStats();

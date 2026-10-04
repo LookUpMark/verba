@@ -119,21 +119,17 @@ def tasks_schema_for(kinds: list[str]) -> dict:
 
 
 def validate_payload(kind: str, payload: dict) -> dict | None:
-    """Minimal structural validation per kind; returns the cleaned payload or None."""
+    """Structural validation per kind: JSON schema first, then semantics.
+
+    Returns the cleaned payload or None."""
+    from . import validate_against_schema
+
     schema = _PAYLOAD_SCHEMAS.get(kind)
     if schema is None:
         return None
-    for key in schema.get("required", []):
-        if key not in payload:
-            return None
-    if kind in ("mc", "gap"):
-        if not isinstance(payload.get("choices"), list) or not isinstance(payload.get("answer"), int):
-            return None
-        if not 0 <= payload["answer"] < len(payload["choices"]):
-            return None
-    if kind == "order" and not isinstance(payload.get("words"), list):
+    if validate_against_schema(payload, schema) is not None:
         return None
-    if kind in ("translate", "listening") and not isinstance(payload.get("accepted"), list):
+    if kind in ("mc", "gap") and not 0 <= payload["answer"] < len(payload["choices"]):
         return None
     # Empty text fields must not reach grading: an empty speaking target
     # would grade every answer correct (word_match_ratio on "").

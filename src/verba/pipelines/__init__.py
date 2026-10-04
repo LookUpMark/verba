@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import jsonschema
 from fastapi import HTTPException
 from sqlmodel import Session
 
@@ -24,6 +25,16 @@ def _role_target(session: Session, role: str) -> tuple[str, str, str]:
     if runtime is None:  # pragma: no cover — discovery keeps rows in sync
         raise HTTPException(status_code=503, detail="runtime record missing; run /api/runtimes/scan")
     return runtime.id, runtime.endpoint, target["model"]
+
+
+def validate_against_schema(payload: object, schema: dict) -> str | None:
+    """Validate against the JSON schema; return a repair hint or None when valid."""
+    try:
+        jsonschema.validate(payload, schema)
+        return None
+    except jsonschema.ValidationError as e:
+        where = "/".join(str(p) for p in e.absolute_path) or "(root)"
+        return f"schema violation at {where}: {e.message}"
 
 
 async def generate_structured(
@@ -57,7 +68,21 @@ async def generate_structured(
             ]
             continue
         if isinstance(parsed, dict):
-            return parsed
+            problem = validate_against_schema(parsed, schema)
+            if problem is None:
+                return parsed
+            last_error = problem
+            attempt_messages = attempt_messages + [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Your reply violated the required schema ({problem}). "
+                        "Here is the schema you must satisfy:\n"
+                        f"{json.dumps(schema)}\nReply again with a single JSON object that validates."
+                    ),
+                },
+            ]
+            continue
         last_error = "reply was not a JSON object"
         attempt_messages = attempt_messages + [
             {"role": "user", "content": "Reply again with a single JSON object."},

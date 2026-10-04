@@ -33,6 +33,12 @@ jobs:
           VERBA_LLM_SPAWN: "0"
         run: python -m pytest -q
 
+      - name: Build whisper.cpp (bundled STT)
+        run: |
+          git clone --depth 1 --branch v1.9.4 https://github.com/ggml-org/whisper.cpp desktop/build/whisper-src
+          cmake -S desktop/build/whisper-src -B desktop/build/whisper-build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DGGML_BUILD_TESTS=OFF
+          cmake --build desktop/build/whisper-build --config Release --target whisper-cli
+
       - name: Sidecar smoke build
         run: python desktop/build-sidecar.py
 

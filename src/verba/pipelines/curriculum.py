@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
@@ -117,6 +119,7 @@ async def generate_unit(session: Session, unit: Node) -> list[Node]:
             parent_id=unit.id,
             position=base + len(out),
             generated=True,
+            target_categories=json.dumps(m.get("target_categories") or []),
         )
         session.add(node)
         out.append(node)

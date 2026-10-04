@@ -29,15 +29,17 @@ _Screenshots from a real run against the oMLX runtime: the A1→B2 path with gen
 ## Why Verba
 
 - **The whole loop, on-device** — placement → path → lessons → tutor → errors → drills → stats. Every step talks to a model you own; the tutor prompt and the judge prompt are separate by design, never merged.
-- **Nothing is hardcoded** — no model id ships with the app. Runtimes are probed at startup, roles (tutor / judge / generator) auto-assign to what you actually have, and you can override any role in the Models screen.
-- **Structured output or nothing** — every JSON a model produces goes through a repair-retry pipeline and per-field validation before it touches the app; the judge's findings merge with a deterministic rule pre-pass for the classic Italian-speaker calques.
+- **Nothing is hardcoded** — no model id ships with the app. Runtimes are probed at startup, roles (tutor / judge / generator) auto-assign to what you actually have, and you can override any role in the Models screen. The **Runtime setup** card starts Ollama or LM Studio and pulls a starter model with live progress — no terminal.
+- **Local voice** — speaking answers are recorded in the browser and transcribed by whisper.cpp on this machine (word-level pronunciation scoring); the acoustic model downloads once on your explicit action, and audio never leaves the device.
+- **Structured output or nothing** — every JSON a model produces is validated against its JSON schema with schema-aware repair retries before it touches the app; the judge's findings merge with a deterministic rule pre-pass for the classic Italian-speaker calques.
 - **Local-first for real** — the API binds to `127.0.0.1` only, requests are validated against a host/origin allowlist (no drive-by web pages), responses carry a strict CSP, and your learning data lives in `~/.verba/verba.db`.
+- **Stays fresh** — an update check at startup surfaces an install chip when a new release is out; installs are one click, on your confirmation.
 
 ## Quickstart
 
-### macOS app (Apple Silicon)
+### macOS app (Apple Silicon and Intel)
 
-Download `Verba_<version>_aarch64.dmg` from the [latest release](https://github.com/LookUpMark/verba/releases/latest), open it and drag Verba to Applications.
+Download `Verba_<version>_aarch64.dmg` (Apple Silicon) or `Verba_<version>_x64.dmg` (Intel) from the [latest release](https://github.com/LookUpMark/verba/releases/latest), open it and drag Verba to Applications.
 
 The build is **ad-hoc signed** (no Apple Developer certificate yet): macOS Gatekeeper stops the first launch, and on macOS Sequoia the old right-click → Open bypass is gone. Unblock it once:
 
@@ -52,7 +54,7 @@ xattr -dr com.apple.quarantine /Applications/Verba.app
 
 The **Check for updates** button in the Models screen talks to this repository's releases — it is the app's only optional network call. Data lives in `~/.verba/`.
 
-> Intel Macs are not built yet (the sidecar needs a Rosetta cross-compile, planned for v0.2). Windows (`-setup.exe` / `.msi`, SmartScreen may warn — *More info → Run anyway*) and Linux (`.AppImage` / `.deb`) installers ship with every release.
+> Windows (`-setup.exe` / `.msi`, SmartScreen may warn — *More info → Run anyway*) and Linux (`.AppImage` / `.deb`) installers ship with every release.
 
 ### Set up a local runtime (required for the AI features)
 
@@ -65,6 +67,17 @@ Verba never downloads or hardcodes models — point it at whatever you already r
 | **Ollama** | `ollama serve`, then `ollama pull qwen3:8b` | probes `:11434` |
 
 Any 7–8B instruct model works well (Qwen3, Gemma, Llama…). Then open **Models → Rescan runtimes**, check the auto-assigned roles (largest known size → judge, next → tutor, smallest → generator), adjust if you like, and start learning. While Verba runs without a runtime it re-scans on its own the moment one shows up; path, review and stats work on seeded content in the meantime.
+
+The **Runtime setup** card on the Models screen does the tedious part for you: if the Ollama CLI is installed but the server is down, one click starts it; if no model is there yet, one click pulls the suggested `qwen3:8b` with a live progress bar; LM Studio's server can be started through its `lms` CLI the same way. oMLX needs nothing — Verba starts and stops it with the app.
+
+### Voice (speaking answers)
+
+Speaking tasks can be answered by voice: the browser captures your microphone,
+sends a WAV to the backend, and whisper.cpp transcribes it **locally** — the
+audio never leaves the machine. Enable it once from the **Models → Voice** card
+(the ~148 MB English acoustic model downloads at that point, on your explicit
+action); the whisper binary itself ships inside the app. Transcripts are graded
+with word-level accuracy and missed words are shown, same as the typed path.
 
 ### From source
 
@@ -104,7 +117,7 @@ curl -N http://127.0.0.1:8000/api/chat/sessions/$SID/stream
 
 ## Roadmap
 
-See [`architecture.md` §11](architecture.md). Next up (v0.2): whisper.cpp STT with real pronunciation scoring, Intel Mac sidecar, guided runtime/model setup, update flow polish.
+See [`architecture.md` §11](architecture.md). Done in v0.2.0: local voice (whisper.cpp STT + pronunciation scoring + OS TTS), runtime setup card with guided model pull, Intel macOS build, automatic update check, full JSON-Schema validation of model output. Next up: forced-alignment pronunciation scoring, Piper TTS, tutor voice input.
 
 ## License
 

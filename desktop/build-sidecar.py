@@ -34,8 +34,9 @@ def main() -> int:
     ext = ".exe" if platform.system() == "Windows" else ""
     name = f"verba-server-{triple}"
     DIST.mkdir(parents=True, exist_ok=True)
-    # --add-data separator is ';' on Windows, ':' elsewhere.
+    # --add-data/-add-binary separator is ';' on Windows, ':' elsewhere.
     sep = ";" if platform.system() == "Windows" else ":"
+    whisper_bin = HERE / "build" / "whisper-build" / "bin" / ("whisper-cli.exe" if platform.system() == "Windows" else "whisper-cli")
     cmd = [
         sys.executable,
         "-m",
@@ -57,6 +58,12 @@ def main() -> int:
         str(HERE.parent / "src"),
         str(HERE / "sidecar_entry.py"),
     ]
+    if whisper_bin.is_file():
+        # Local STT (§9): the compiled whisper-cli rides along; the acoustic
+        # model is downloaded once on user enable.
+        cmd += ["--add-binary", f"{whisper_bin}{sep}voice"]
+    else:
+        print(f"note: {whisper_bin} not found — building the sidecar without bundled STT")
     print("+", " ".join(cmd))
     subprocess.run(cmd, check=True)
     print(f"sidecar ready: {DIST / (name + ext)}")

@@ -27,12 +27,16 @@ from ..config import settings
 from ..db import engine
 
 _OMLX_CLI = Path.home() / ".omlx" / "bin" / "omlx"
+_LMS_CLI = Path.home() / ".lmstudio" / "bin" / "lms"
 _OMLX_MODELS = Path.home() / ".omlx" / "models"
 _LOG = Path.home() / ".verba" / "llm.log"
 
 _lock = threading.Lock()
-_state = "off"  # off | starting | up
-_owned: tuple[subprocess.Popen[Any], Any] | None = None  # (child, open log handle)
+_state = "off"  # off | starting | up (oMLX state, kept for the probe loop)
+# Servers this process spawned: {"kind": "omlx"|"ollama", "child": Popen, "logf": file}.
+# LM Studio is daemon-based and tracked separately by a flag.
+_owned: list[dict[str, Any]] = []
+_lmstudio_owned = False
 
 
 def _mlx_probe() -> httpx.Request | None:
@@ -84,6 +88,91 @@ def _spawn_omlx() -> tuple[subprocess.Popen[Any], Any]:
     return child, logf
 
 
+def _spawn_tracked(kind: str, cmd: list[str], log_line: str) -> dict[str, Any] | None:
+    """Spawn a detached local server in its own session and track it as owned."""
+    _LOG.parent.mkdir(parents=True, exist_ok=True)
+    logf = _LOG.open("a", buffering=1)
+    logf.write(f"--- verba {log_line}\n")
+    child = subprocess.Popen(  # noqa: S603 — fixed local CLI, fixed args
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=logf,
+        stderr=logf,
+        start_new_session=True,
+    )
+    entry = {"kind": kind, "child": child, "logf": logf}
+    with _lock:
+        _owned.append(entry)
+    return entry
+
+
+def start_ollama() -> dict[str, str]:
+    """Start `ollama serve` from the Runtime setup screen (owned if we spawn it)."""
+    import shutil
+
+    cli = shutil.which("ollama")
+    if not cli:
+        return {"status": "no-cli"}
+    if _ollama_up():
+        return {"status": "up"}
+    _spawn_tracked("ollama", [cli, "serve"], "spawning ollama serve on 127.0.0.1:11434")
+    threading.Thread(target=_wait_ollama_then_rescan, daemon=True).start()
+    return {"status": "starting"}
+
+
+def _ollama_up() -> bool:
+    try:
+        probe = next(p for p in settings.probes if p.runtime_id == "ollama")
+        r = httpx.get(f"{probe.base_url.rstrip('/')}/api/tags", timeout=2.0)
+        return r.status_code < 400
+    except httpx.HTTPError:
+        return False
+
+
+def _wait_ollama_then_rescan() -> None:
+    import time
+
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if _ollama_up():
+            _refresh_discovery()
+            return
+        threading.Event().wait(2.0)
+
+
+def start_lmstudio() -> dict[str, str]:
+    """Start the LM Studio server via its CLI (daemon-based, stopped on exit if we started it)."""
+    import shutil
+
+    global _lmstudio_owned
+    cli = shutil.which("lms") or (str(_LMS_CLI) if _LMS_CLI.exists() else None)
+    if not cli:
+        return {"status": "no-cli"}
+    if _lmstudio_probe_ok():
+        return {"status": "up"}
+    try:
+        subprocess.run([cli, "server", "start"], timeout=60, capture_output=True, check=False)  # noqa: S603
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"[verba] lms server start failed: {e}", flush=True)
+        return {"status": "error"}
+    for _ in range(15):
+        if _lmstudio_probe_ok():
+            _lmstudio_owned = True
+            _refresh_discovery()
+            return {"status": "up"}
+        threading.Event().wait(2.0)
+    return {"status": "starting"}
+
+
+def _lmstudio_probe_ok() -> bool:
+    try:
+        probe = next(p for p in settings.probes if p.runtime_id == "lmstudio")
+        r = httpx.get(f"{probe.base_url.rstrip('/')}/models", timeout=2.0)
+        return r.status_code < 400
+    except httpx.HTTPError:
+        return False
+
+
 def _wait_until_up(child: subprocess.Popen[Any], budget_s: float = 150.0) -> bool:
     # Time-based budget: the old attempts×step ladder multiplied by the
     # generous 4s probe timeout could reach ~6 minutes. A short probe timeout
@@ -131,7 +220,8 @@ def _worker() -> None:
             _state = "off"
             return
         child, logf = _spawn_omlx()
-        _owned = (child, logf)
+        with _lock:
+            _owned.append({"kind": "omlx", "child": child, "logf": logf})
         if _wait_until_up(child):
             _state = "up"
             _refresh_discovery()  # discovery ran before the server answered
@@ -149,31 +239,38 @@ def ensure_llm_server() -> None:
 
 
 def shutdown_backend() -> None:
-    """Kill the LLM server, but only the one this process spawned."""
-    global _owned, _state
+    """Stop the LLM servers, but only the ones this process spawned."""
+    global _owned, _state, _lmstudio_owned
     with _lock:
-        owned, _owned = _owned, None
+        owned, _owned = _owned, []
         _state = "off"
-    if owned is None:
-        return
-    child, logf = owned
-    if hasattr(os, "killpg"):
-        with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
-            os.killpg(os.getpgid(child.pid), signal.SIGTERM)
-    else:  # pragma: no cover — Windows has no process groups
-        child.terminate()
-    # Reap and escalate: without wait() the SIGTERM'd child stays a zombie
-    # until our own exit, and a server slow to die would survive holding the
-    # port and the GPU memory while the next boot misreads it as foreign.
-    try:
-        child.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
-            if hasattr(os, "killpg"):
-                os.killpg(os.getpgid(child.pid), signal.SIGKILL)
-            else:  # pragma: no cover
-                child.kill()
-        with contextlib.suppress(Exception):
-            child.wait(timeout=5)
-    with contextlib.suppress(OSError):
-        logf.close()
+    for entry in owned:
+        child = entry["child"]
+        if hasattr(os, "killpg"):
+            with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
+                os.killpg(os.getpgid(child.pid), signal.SIGTERM)
+        else:  # pragma: no cover — Windows has no process groups
+            child.terminate()
+        # Reap and escalate: without wait() the SIGTERM'd child stays a zombie
+        # until our own exit, and a server slow to die would survive holding the
+        # port and the GPU memory while the next boot misreads it as foreign.
+        try:
+            child.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError, AttributeError):
+                if hasattr(os, "killpg"):
+                    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+                else:  # pragma: no cover
+                    child.kill()
+            with contextlib.suppress(Exception):
+                child.wait(timeout=5)
+        with contextlib.suppress(OSError):
+            entry["logf"].close()
+    if _lmstudio_owned:
+        _lmstudio_owned = False
+        import shutil
+
+        cli = shutil.which("lms") or (str(_LMS_CLI) if _LMS_CLI.exists() else None)
+        if cli:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run([cli, "server", "stop"], timeout=30, capture_output=True, check=False)  # noqa: S603

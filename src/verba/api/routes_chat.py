@@ -52,6 +52,23 @@ def _history(session: Session, session_id: str) -> list[dict]:
     return [{"role": m.role, "content": m.content} for m in rows if m.role in ("user", "tutor")]
 
 
+def _last_coach(session: Session, session_id: str) -> str:
+    """The most recent judge reply_coach for this session, if any (§8)."""
+    rows = session.exec(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id, ChatMessage.role == "system")
+        .order_by(ChatMessage.created_at.desc())
+    ).all()
+    for row in rows:
+        try:
+            coach = str(json.loads(row.content).get("reply_coach") or "").strip()
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if coach:
+            return coach
+    return ""
+
+
 def _tutor_target(session: Session) -> tuple[str, str, str] | None:
     roles = resolve_roles(session)
     target = roles.get("tutor")
@@ -89,6 +106,12 @@ async def stream_session(session_id: str, db: Session = Depends(get_session)) ->
             provider = provider_for(target[0], runtime.endpoint, target[2])
             scenario_desc = next((s["description"] for s in SCENARIOS if s["id"] == cs.scenario), cs.scenario)
             messages = tutor_messages(cs.persona, cs.scenario, cs.level, scenario_desc, history)
+            coach = _last_coach(db, session_id)
+            if coach:
+                # §8: reply_coach feeds the tutor's next-turn prefix. Injected as
+                # a hint — the tutor weaves the fix in naturally and never
+                # mentions the judge (that's the diagnosis card's job).
+                messages.insert(1, {"role": "system", "content": f"Coaching hint for your next reply — weave the fix in naturally, never mention the judge: {coach}"})
             if not pending_user:
                 messages.append({"role": "user", "content": "(Start the conversation in character.)"})
             async for chunk in provider.complete(messages, model=target[2], temperature=0.8, max_tokens=160):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
 
 from sqlmodel import Session, SQLModel, create_engine
@@ -16,15 +17,18 @@ def init_db() -> None:
     settings.db_path.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(engine)
     # create_all does not alter existing tables: add the (mission_id, kind)
-    # uniqueness to DBs created before the constraint existed. A DB holding
-    # pre-existing duplicates can't take the index — keep the app booting.
+    # uniqueness to DBs created before the constraint existed, and the
+    # target_categories column to nodes. A DB that can't take them keeps the
+    # app booting (degraded schema beats a dead app).
     with engine.begin() as conn:
         try:
             conn.exec_driver_sql(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_mission_kind ON tasks (mission_id, kind)"
             )
-        except Exception as e:  # noqa: BLE001 — degraded schema is better than a dead app
+        except Exception as e:  # noqa: BLE001
             print(f"[verba] could not add tasks uniqueness index: {e}", flush=True)
+        with contextlib.suppress(Exception):  # column already exists
+            conn.exec_driver_sql("ALTER TABLE nodes ADD COLUMN target_categories TEXT")
 
 
 def get_session() -> Iterator[Session]:

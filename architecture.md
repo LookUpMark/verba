@@ -237,14 +237,14 @@ The MLX adapter talks to oMLX (the default MLX runtime on macOS installs): it se
 ```
 prompt ──► provider.complete(json_schema=S)
        ──► json.loads
-       ──► must be a JSON object
-       ├── valid   ──► done (field-level validation happens in the consumer:
-       │                 tasks.validate_payload per kind, judge _norm_error)
-       └── unparsable / not an object ──► repair prompt ──► retry (max 2)
-                                             └── still invalid → 503 with reason
+       ──► JSON-Schema validation (jsonschema) against S
+       ├── valid   ──► done (semantic checks still apply per consumer:
+       │                 tasks.validate_payload range/emptiness, judge _norm_error)
+       └── unparsable / schema violation ──► repair prompt (schema + error path)
+                                             ──► retry (max 2) ──► 503 with reason
 ```
 
-Never parse LLM output with hope: an unparsable reply triggers a repair retry, and every downstream consumer validates its fields (task payloads per kind with range/emptiness checks, judge errors normalized and category-clamped). Full JSON-Schema validation of judge/curriculum output is planned for v0.2.
+Never parse LLM output with hope: an unparsable or schema-violating reply triggers a repair retry that includes the schema and the validator's error paths; downstream consumers add semantic checks on top (task payload ranges/emptiness, judge error normalization and category clamping).
 
 ## 6. API endpoints
 
@@ -275,6 +275,15 @@ All under `http://127.0.0.1:<port>/api`. JSON in/out unless noted. SSE endpoints
 | `GET` | `/stats/errors` | error counts by category | Stats / weak spots |
 | `GET` | `/stats/library` | missions in library, SRS cards total/retired | Stats |
 | `GET` | `/stats/profile-keys` | raw profile key/value pairs | internal |
+| `GET` | `/runtime/setup` | actionable per-runtime state (CLI present, server up, hint) | Models → Runtime setup |
+| `POST` | `/runtime/ollama/start` | start `ollama serve` (owned if Verba spawns it) | Models → Runtime setup |
+| `POST` | `/runtime/lmstudio/start` | start the LM Studio server via the `lms` CLI | Models → Runtime setup |
+| `POST` | `/runtime/ollama/pull` | pull a model with progress (job id; poll the status endpoint) | Models → Runtime setup |
+| `GET` | `/runtime/ollama/pull/{job}` | pull progress/status | Models → Runtime setup |
+| `GET` | `/voice/state` | local STT state (binary, model, download progress) | Models → Voice |
+| `POST` | `/voice/enable` | one-time acoustic model download (user-initiated) | Models → Voice |
+| `POST` | `/voice/transcribe` | raw WAV body → transcript (whisper-cli, local) | Speaking task |
+| `POST` | `/voice/tts` | text → WAV via the OS synthesizer | Listening fallback |
 | `GET` | `/runtimes` | detected runtimes + models + current role assignment | Models |
 | `POST` | `/runtimes/scan` | re-probe endpoints | Models |
 | `PUT` | `/roles` | assign model per role | Models |
@@ -360,7 +369,7 @@ Separate prompt, separate model slot, no persona. Input: the last tutor turn, th
 ```
 
 - The prototype's 15+ deterministic rules ("I am agree", "informations", "didn't went", "I have 25 years", "a/an"…) become a **fast pre-pass**: cheap, instant, catches the highest-frequency calques. The LLM judge runs on everything and merges with the pre-pass — deterministic findings filter LLM false positives, LLM findings catch what regex never will.
-- `suggested_drill` seeds SRS directly (deduplicated by front, `source='error:llm'`). `reply_coach` is produced (required by the judge schema) but not yet consumed by the tutor — candidate for v0.2.
+- `suggested_drill` seeds SRS directly (deduplicated by front, `source='error:llm'`). `reply_coach` feeds the tutor's next turn as a coaching hint (injected as a system message; the tutor weaves the fix in naturally and never mentions the judge).
 - Every error row gets `source='tutor'` and flows into Review + the curriculum's `target_errors`.
 
 ### 7.4 Adaptive path
@@ -377,9 +386,9 @@ Separate prompt, separate model slot, no persona. Input: the last tutor turn, th
 
 ## 9. Voice
 
-- **STT** — whisper.cpp, `base.en`/`small.en` quantized, loaded in-process. Endpoints: `POST /voice/transcribe` (audio blob → text). Used by speaking tasks and (v2) tutor voice input. The prototype uses the browser's Web Speech API and says so; the backend replaces it with a fully local path.
-- **TTS** — Piper, one `en_US` voice. `POST /voice/tts` → wav. Replaces the browser's `speechSynthesis` for listening tasks and tutor speech.
-- **Pronunciation scoring** (v2): forced alignment of the transcript against the target sentence (word-level timestamps from whisper) → per-word accuracy, beyond the prototype's word-recognition-only check.
+- **STT** — whisper.cpp (`ggml-base.en`), compiled in CI and bundled next to the sidecar; the acoustic model (~148 MB) is downloaded once on explicit user action from the Models screen, into `~/.verba/voice/`. `POST /voice/transcribe` takes a 16 kHz WAV body (the UI captures mono PCM in the browser, resamples to 16 kHz and sends a WAV — no ffmpeg needed) and returns the transcript. Speaking tasks record, transcribe locally, and grade the transcript server-side with the existing word-match scoring.
+- **TTS** — the operating system's synthesizer (`say` on macOS, `espeak-ng` on Linux, SAPI on Windows) behind `POST /voice/tts` → WAV; the browser's `speechSynthesis` remains the first choice for listening tasks and the endpoint is the fallback. Piper with a fixed `en_US` voice stays future work if voice consistency ever matters more than zero downloads.
+- **Pronunciation scoring** — word-level accuracy against the target (missed words listed in the UI); forced alignment with per-word timestamps from whisper remains v2.
 
 ## 10. Project structure
 
@@ -414,6 +423,10 @@ repo root (verba)/
 
 Also landed in v0.1.2 (audit fixes): local-only API guard (Host/Origin checks), CSP headers from the sidecar, server-side mission scoring, task uniqueness + partial-set regeneration, judge score floor and drill dedup, oMLX retry deadline and shutdown reaping, updater plugin wired in-app, release dry-run guard + asset verification, Cargo.lock and constraints.txt committed, first pytest suite (29 tests) in CI.
 
+Also landed in v0.1.3/v0.1.4 (public-repo round): in-app "Check for updates", self-recovering degraded mode (503 → Models screen, focus rescan), oMLX Bearer auth and runtime lifecycle, public README with real screenshots, designed SVG app icon, narrative release notes, runtime discovery endpoint refresh, retry budget that outlasts cold model loads.
+
+Landed in v0.2.0: local voice — whisper.cpp STT bundled with the app (model downloaded once on user enable) with word-level pronunciation scoring on speaking tasks and OS-native TTS behind `/voice/tts`; a runtime setup card (start Ollama/LM Studio, pull a model with live progress — no terminal); an automatic update check at startup with an install chip; JSON-Schema validation with schema-aware repair prompts on every structured LLM call; `reply_coach` fed to the tutor's next turn; `target_categories` persisted on AI missions; native Intel macOS build via the `macos-13` runner.
+
 Milestones in dependency order; each maps to working prototype screens:
 
 | # | Milestone | Status |
@@ -424,8 +437,8 @@ Milestones in dependency order; each maps to working prototype screens:
 | 4 | Task engine: all six kinds, seeded content + generation | ✅ done (v0.1.0) — lazy LLM generation with per-kind payload contract + retries |
 | 5 | SRS (FSRS) + Review endpoints + error→drill loop | ✅ done (v0.1.0) |
 | 6 | Stats endpoints + adaptive path ranking | ✅ done (v0.1.0) |
-| 7 | Voice: whisper.cpp STT on speaking tasks, Piper TTS on listening | 🔜 v0.2 — browser Speech API/speechSynthesis in the meantime |
-| 8 | Intel macOS (x86_64 Rosetta sidecar) + update flow polish | 🔜 v0.2 — updater plugin + in-app "Check for updates" shipped in v0.1.3; installers ship signed artifacts since v0.1.1 |
+| 7 | Voice: whisper.cpp STT on speaking tasks, TTS on listening | ✅ done (v0.2.0) — bundled whisper-cli + on-enable model download, word-level scoring, OS-native TTS fallback |
+| 8 | Intel macOS + update flow | ✅ done (v0.2.0) — native Intel build via the macos-13 runner; automatic update check at startup with an install chip |
 
 Also landed after v0.1.0: the prototype UI (index.html) talks to the real API when served by the
 backend same-origin (file:// keeps the offline demo), the PyInstaller sidecar bundles the UI

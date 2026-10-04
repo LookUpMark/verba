@@ -32,6 +32,9 @@ class Node(SQLModel, table=True):
     position: int = 0
     generated: bool = True
     regen_count: int = 0
+    # JSON list of error categories this AI mission targets (§7.1) — feeds the
+    # adaptive path. Null for seeded skeleton missions.
+    target_categories: str | None = None
     created_at: str = Field(default_factory=now_iso)
 
 
