@@ -62,11 +62,13 @@ jobs:
       matrix:
         settings:
           # Each macOS build runs on its native runner: macos-latest (arm64)
-          # and macos-13 (the last Intel x86_64 runner) — the PyInstaller
+          # and macos-15 (from macOS 15 the plain label is the Intel x86_64
+          # machine; arm64 has the explicit -arm64 suffix) — the PyInstaller
           # sidecar cannot cross-compile, so no Rosetta tricks are needed.
+          # The old macos-13 label is retired: jobs queued on it forever.
           - os: macos-latest
             args: --target aarch64-apple-darwin
-          - os: macos-13
+          - os: macos-15
             args: --target x86_64-apple-darwin
           - os: windows-latest
             args: ""
@@ -99,7 +101,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.settings.os == 'macos-latest' && 'aarch64-apple-darwin' || (matrix.settings.os == 'macos-13' && 'x86_64-apple-darwin' || '') }}
+          targets: ${{ matrix.settings.os == 'macos-latest' && 'aarch64-apple-darwin' || (matrix.settings.os == 'macos-15' && 'x86_64-apple-darwin' || '') }}
 
       - uses: Swatinem/rust-cache@v2
         with:
