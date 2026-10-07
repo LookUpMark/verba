@@ -33,9 +33,11 @@ def _probe_base(runtime_id: str) -> str:
 
 
 def _probe_ok(runtime_id: str) -> bool:
+    # Reuse the configured probe (oMLX requires Bearer auth — a bare GET is a 401).
+    probe = next(p for p in settings.probes if p.runtime_id == runtime_id)
     try:
         path = "/api/tags" if runtime_id == "ollama" else "/models"
-        r = httpx.get(f"{_probe_base(runtime_id)}{path}", timeout=1.5)
+        r = httpx.get(f"{probe.base_url.rstrip('/')}{path}", headers=probe.headers, timeout=probe.timeout_s or 1.5)
         return r.status_code < 400
     except httpx.HTTPError:
         return False
