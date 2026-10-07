@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
@@ -11,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from ..db import get_session
+from ..db import engine, get_session
 from ..models import ChatMessage, ChatSession, RuntimeRecord
 from ..pipelines.judge import judge_message
 from ..pipelines.prompts import tutor_messages
@@ -129,10 +130,24 @@ async def stream_session(session_id: str, db: Session = Depends(get_session)) ->
             return
 
         if pending_user:
-            diagnosis = await judge_message(db, cs.level, tutor_line, history[-1]["content"], source="tutor")
-            payload = json.dumps(diagnosis)
-            db.add(ChatMessage(session_id=session_id, role="system", content=payload, diagnosis=payload))
-            db.commit()
+            # The judge must finish and persist even if the client disconnects
+            # mid-analysis (page reload, app quit, early Finish): run it as a
+            # detached task on its own DB session and only *deliver* the event
+            # over this stream.
+            async def _judge_and_persist() -> dict[str, Any]:
+                try:
+                    with Session(engine) as s:
+                        diagnosis = await judge_message(s, cs.level, tutor_line, history[-1]["content"], source="tutor")
+                        payload = json.dumps(diagnosis)
+                        s.add(ChatMessage(session_id=session_id, role="system", content=payload, diagnosis=payload))
+                        s.commit()
+                    return diagnosis
+                except Exception as e:  # noqa: BLE001 — keep the stream alive, log server-side
+                    print(f"[verba] judge failed: {e!r}", flush=True)
+                    return {"score": 100, "errors": [], "reply_coach": ""}
+
+            judge_task = asyncio.create_task(_judge_and_persist())
+            diagnosis = await asyncio.shield(judge_task)
             yield _sse("diagnosis", diagnosis)
 
         yield _sse("done", {"status": "complete"})
