@@ -1367,6 +1367,12 @@ function renderTask() {
   prompt.innerHTML = t.kind === "gap" ? t.prompt.replace("___", '<span class="gap">____</span>') : t.prompt;
   body.appendChild(kind);
   body.appendChild(prompt);
+  if (t.kind === "speaking" && t.say) {
+    const say = document.createElement("p");
+    say.className = "task-prompt say-sentence";
+    say.textContent = "“" + t.say + "”";
+    body.appendChild(say);
+  }
 
   const zone = document.createElement("div");
   zone.className = "od-stack";
@@ -1463,6 +1469,9 @@ function renderTask() {
       grade(t, built === t.words.join(" "), t.words.join(" "), built);
     });
   } else if (t.kind === "speaking") {
+    const zoneSpeak = document.createElement("div");
+    zoneSpeak.className = "speak-zone";
+    zone.appendChild(zoneSpeak);
     if (API.mode) {
       // API mode: record locally and transcribe with the bundled whisper.cpp
       // (§9); the server grades the transcript. Typing stays as the fallback.
@@ -1483,6 +1492,10 @@ function renderTask() {
         heardBox.querySelector(".h-text").textContent = text;
         check.disabled = false;
       }
+      const playBtn = document.createElement("button");
+      playBtn.className = "btn btn-secondary audio-btn";
+      playBtn.innerHTML = icon("vol") + " Hear the model";
+      playBtn.addEventListener("click", () => speak(t.say));
       const mic = document.createElement("button");
       mic.className = "mic-btn";
       mic.setAttribute("aria-label", "Tap to record");
@@ -1532,6 +1545,7 @@ function renderTask() {
           if (e.status === 503) apiMaybeModels(e);
         }
       });
+      zoneSpeak.appendChild(playBtn);
       zoneSpeak.appendChild(mic);
       zoneSpeak.appendChild(hint);
       zoneSpeak.appendChild(heardBox);
@@ -1553,9 +1567,6 @@ function renderTask() {
       return;
     }
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const zoneSpeak = document.createElement("div");
-    zoneSpeak.className = "speak-zone";
-    zone.appendChild(zoneSpeak);
 
     const playBtn = document.createElement("button");
     playBtn.className = "btn btn-secondary audio-btn";
@@ -2195,6 +2206,7 @@ $("#chat-send").addEventListener("click", sendChat);
 $("#chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
 $("#chat-finish").addEventListener("click", async function () {
   if (!chat || !chat.sessionId) return;
+  if (chat.streaming) { toast("The judge is still analyzing your last reply — one moment."); return; }
   if (chat.es) { try { chat.es.close(); } catch (e) {} chat.es = null; }
   try {
     const r = await API.post("/api/chat/sessions/" + chat.sessionId + "/finish");
