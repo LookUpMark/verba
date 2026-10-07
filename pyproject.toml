@@ -1,6 +1,6 @@
 [project]
 name = "verba"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first AI language learning — structured courses, tutor and drills on your own local LLM"
 license = "MIT"
 requires-python = ">=3.12"
