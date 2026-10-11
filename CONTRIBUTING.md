@@ -22,7 +22,7 @@ Every merge is a pull request. Direct pushes to `main`/`test` are not part of th
 
 A PR is mergeable only when **both** hold:
 
-1. **CI green** — the `backend` and `desktop` checks pass on the PR (CI triggers on every pull request).
+1. **CI green** — the `backend` and `desktop` jobs pass on the PR for every matrix runner (ubuntu/windows/macos; the required status contexts are e.g. `backend (ubuntu-latest)`).
 2. **Agent approval** — the `pr-approver` agent (global agent, `~/.zcode/agents/pr-approver.md`) reviews the diff, re-runs the verification locally and posts an explicit **APPROVE** / **REQUEST_CHANGES** verdict as a PR review. Merging on REQUEST_CHANGES is not allowed; fix, push, re-review.
 
 Squash-merge for feature PRs (one clean commit per feature); merge commits for promotion PRs (develop→test→main) to keep the group history.
