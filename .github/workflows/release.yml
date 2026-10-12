@@ -36,23 +36,17 @@ jobs:
             exit 1
           fi
 
-      - name: Read version
-        id: ver
-        run: |
-          V=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "version=$V" >> "$GITHUB_OUTPUT"
-
       - name: Create draft release
         id: create
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          name: Verba ${{ steps.ver.outputs.version }}
+          # Title = the tag alone, same convention as osusume ("v0.2.2").
+          name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          # Hand-written narrative notes (maintained per release in the repo),
-          # with the auto changelog appended by the action.
+          # Hand-written narrative notes (maintained per release in the repo).
+          # No auto-generated changelog footer — osusume releases don't have one.
           body_path: RELEASE_NOTES.md
-          generate_release_notes: true
 
   build:
     needs: create-release

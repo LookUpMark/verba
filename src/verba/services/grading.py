@@ -41,7 +41,11 @@ def grade_task(kind: str, payload_json: str, answer: str) -> tuple[bool, str]:
     """Returns (is_correct, correct_answer_text)."""
     payload = json.loads(payload_json)
     if kind in ("mc", "gap"):
-        idx = "abcd".find(_norm(answer))
+        normalized = _norm(answer)
+        # An empty answer must find no index: "abcd".find("") returns 0, which
+        # would grade a blank submission as correct whenever the first choice
+        # is the right one.
+        idx = "abcd".find(normalized) if normalized else -1
         correct_text = str(payload["choices"][payload["answer"]])
         return idx == payload["answer"], correct_text
     if kind == "translate":
