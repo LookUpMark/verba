@@ -151,3 +151,14 @@ class TestQaFixRegressions:
         r = client.post(f"/api/missions/{some_mission}/complete", json={"correct": 999, "total": 1000})
         assert r.status_code == 400
         assert "no attempts" in r.json()["detail"]
+
+
+class TestQaUiNav:
+    def test_bottombar_has_the_same_screens_as_the_sidebar(self):
+        import pathlib
+        import re
+
+        html = pathlib.Path(__file__).resolve().parents[1].joinpath("index.html").read_text()
+        sidebar = re.search(r'<nav class="nav"(.*?)</nav>', html, re.S).group(1)
+        bottombar = re.search(r'<nav class="bottombar"(.*?)</nav>', html, re.S).group(1)
+        assert set(re.findall(r'data-nav="(\w+)"', sidebar)) == set(re.findall(r'data-nav="(\w+)"', bottombar))
