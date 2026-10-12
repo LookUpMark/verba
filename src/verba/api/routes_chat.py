@@ -97,7 +97,7 @@ async def stream_session(session_id: str, db: Session = Depends(get_session)) ->
         pending_user = bool(history) and history[-1]["role"] == "user"
         target = _tutor_target(db)
         if target is None:
-            yield _sse("error", {"detail": "No tutor model detected. Start LM Studio or Ollama and re-scan runtimes."})
+            yield _sse("error", {"detail": "No tutor model detected. Start oMLX, LM Studio or Ollama and use Rescan on the Models screen."})
             yield _sse("done", {"status": "error"})
             return
 
