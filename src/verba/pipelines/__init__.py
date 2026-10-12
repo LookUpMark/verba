@@ -19,11 +19,11 @@ def _role_target(session: Session, role: str) -> tuple[str, str, str]:
     if target is None:
         raise HTTPException(
             status_code=503,
-            detail=f"No '{role}' model detected. Start LM Studio or Ollama and POST /api/runtimes/scan.",
+            detail=f"No '{role}' model detected. Start oMLX, LM Studio or Ollama and use Rescan on the Models screen.",
         )
     runtime = session.get(RuntimeRecord, target["runtime"])
     if runtime is None:  # pragma: no cover — discovery keeps rows in sync
-        raise HTTPException(status_code=503, detail="runtime record missing; run /api/runtimes/scan")
+        raise HTTPException(status_code=503, detail="runtime record missing; use Rescan on the Models screen")
     return runtime.id, runtime.endpoint, target["model"]
 
 
