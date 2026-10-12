@@ -158,7 +158,7 @@ class TestQaUiNav:
         import pathlib
         import re
 
-        html = pathlib.Path(__file__).resolve().parents[1].joinpath("index.html").read_text()
+        html = pathlib.Path(__file__).resolve().parents[1].joinpath("index.html").read_text(encoding="utf-8")
         sidebar = re.search(r'<nav class="nav"(.*?)</nav>', html, re.S).group(1)
         bottombar = re.search(r'<nav class="bottombar"(.*?)</nav>', html, re.S).group(1)
         assert set(re.findall(r'data-nav="(\w+)"', sidebar)) == set(re.findall(r'data-nav="(\w+)"', bottombar))
