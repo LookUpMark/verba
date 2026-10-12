@@ -1,26 +1,38 @@
-The v0.2.1 maintenance release: a full end-to-end audit of the installed app — backend against a live local model, every screen driven in a real browser, voice, and the packaged DMG lifecycle — surfaced three real defects. All three are fixed here. No new features; if 0.2.0 worked for you, this makes it stop lying in three specific places.
+The QA release: a full audit round — unit coverage gaps closed, every API endpoint exercised against a live local model, every screen driven in a real browser, adversarial "what if the user does something odd" passes, and the packaged DMG lifecycle — surfaced four real defects and a lying error message. All fixed here. No new features; if 0.2.1 worked for you, this makes it stop cheating in four specific places.
 
-## Runtime setup card no longer reports oMLX as stopped
+## Blank answers no longer score as correct
 
-- **The setup wizard probed `/v1/models` without authentication** — oMLX requires Bearer auth, so the probe always got a 401 and the Models screen showed "Not running" even while Verba had the server up and detected with all models listed. The probe now reuses the configured endpoint headers (Authorization included) and timeouts, so the card tells the truth: server running, CLI present, models in place.
+- **Grading of multiple-choice and gap tasks trusted `"abcd".find(answer)`** — and Python's `find("")` returns 0, so submitting an empty answer matched choice "a": every blank submission was graded CORRECT whenever the first option was the right one, inflating XP and accuracy stats. Blank answers are now always incorrect.
 
-## The speaking task renders again in the desktop app
+## Placement now lands where it should
 
-- **A scoping bug left the speaking screen empty** — in API mode the renderer appended its widgets to a container only defined in the file:// demo branch, after an early return: a ReferenceError fired and the learner got a bare prompt with a permanently disabled Check. Every mission was stuck at its speaking task. The container is now built once for both branches, and the desktop task shows what the demo always had, plus what whisper grading needs: **the sentence to read**, a "Hear the model" button, the mic, and the "Type instead" fallback.
+- **Placement results unlocked the wrong missions** — the path enumerated missions in an effectively random order (sorted by a hex unit id), so placing at B2 marked a scattered set done and pointed the learner at the very first A1 lesson, while placing at A2 pre-marked the A2 missions themselves complete. The curriculum is now walked in true order (level → unit → mission), and after placement the current mission is the first one of the placed level.
 
-## Judge diagnoses survive an early exit
+## A forged completion can no longer mint XP
 
-- **Closing the chat stream mid-analysis lost the diagnosis** — the judge ran inside the SSE generator, so finishing the session, reloading, or quitting the app while the local model was still grading (it can take ~40s on a 12B model) cancelled the work before it committed: sessions ended "0 errors" with errors on screen, and nothing reached the review loop. The judge now runs as a detached task on its own database session — the verdict is persisted no matter what the client does — and the Finish button refuses to close a session while a reply is still being analyzed.
+- **Completing a mission without answering anything trusted the client** — a `{correct: 999, total: 1000}` payload produced a 100% / +40 XP completion. Completion now requires actually recorded attempts and refuses otherwise (400); the app itself always grades through the attempts API, so normal play is untouched.
+
+## Stats is back on narrow windows
+
+- **The mobile bottom bar was missing its Stats button** — below a 900 px window (the desktop app can be resized down to 375 px) Statistics became unreachable. The bar now mirrors the sidebar's five screens.
+
+## Honest degraded-mode hints
+
+- When no model is detected, the message now points at oMLX, LM Studio or Ollama and the Models screen's Rescan — it previously named a nonexistent `/api/runtimes/scan` endpoint and omitted oMLX, the primary runtime.
+
+## Under the hood
+
+- The test suite grew from 38 to 58 tests: coverage for previously untested grading, FSRS scheduling, judge scoring and pronunciation-scoring branches, plus a regression test for every fix above. The full audit report — including the issues investigated and dismissed, and the product decisions deliberately left open — lives in [docs/validations/QA-20261012-verba.md](https://github.com/LookUpMark/verba/blob/main/docs/validations/QA-20261012-verba.md).
 
 ## Installers
 
 | Platform | File |
 |---|---|
-| macOS (Apple Silicon) | `Verba_0.2.1_aarch64.dmg` |
-| macOS (Intel) | `Verba_0.2.1_x64.dmg` |
-| Windows | `Verba_0.2.1_x64-setup.exe` / `Verba_0.2.1_x64_en-US.msi` |
-| Linux | `Verba_0.2.1_amd64.AppImage` / `Verba_0.2.1_amd64.deb` |
+| macOS (Apple Silicon) | `Verba_0.2.2_aarch64.dmg` |
+| macOS (Intel) | `Verba_0.2.2_x64.dmg` |
+| Windows | `Verba_0.2.2_x64-setup.exe` / `Verba_0.2.2_x64_en-US.msi` |
+| Linux | `Verba_0.2.2_amd64.AppImage` / `Verba_0.2.2_amd64.deb` |
 
-Builds are unsigned — macOS requires System Settings → Privacy & Security → Open Anyway on first launch (see the README's Gatekeeper guide). Upgrading from 0.2.0: install over the existing app, no data changes.
+Builds are unsigned — macOS requires System Settings → Privacy & Security → Open Anyway on first launch (see the README's Gatekeeper guide). Upgrading from 0.2.x: install over the existing app, no data changes.
 
 See the [README](https://github.com/LookUpMark/verba#readme) for setup and usage.
