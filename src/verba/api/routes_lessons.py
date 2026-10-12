@@ -91,8 +91,11 @@ def complete_mission(mission_id: str, body: CompleteBody, session: Session = Dep
     total = len(attempts)
     correct = sum(1 for a in attempts if a.is_correct)
     if total == 0:
-        total = max(1, body.total)
-        correct = max(0, min(body.correct, total))
+        # No attempts recorded: refusing keeps the client body from inventing
+        # a score (the old fallback let {correct: 999, total: 1000} through as
+        # a 100% / 40 XP completion). The UI always grades via /api/attempts,
+        # so a zero-attempt completion can only be a forged or buggy call.
+        raise HTTPException(status_code=400, detail="no attempts recorded for this mission — complete its tasks first")
     acc = max(0, min(100, round(100 * correct / total)))
     gained = 20 + round(acc / 5)
 

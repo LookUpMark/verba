@@ -109,3 +109,45 @@ class TestScorePronunciation:
     def test_empty_transcript_is_zero_not_a_crash(self):
         result = score_pronunciation("Where is the gate?", "")
         assert result["accuracy"] == 0 and len(result["missed"]) == 4
+
+class TestQaFixRegressions:
+    """Regression tests for the bugs found by the 2026-10-12 QA round."""
+
+    def test_empty_answer_never_grades_mc_gap_correct(self):
+        payload = json.dumps({"choices": ["right", "b", "c", "d"], "answer": 0})
+        assert grade_task("mc", payload, "") == (False, "right")
+        assert grade_task("mc", payload, "   ") == (False, "right")
+        gap = json.dumps({"choices": ["a", "right", "c", "d"], "answer": 1})
+        assert grade_task("gap", gap, "") == (False, "right")
+        # whitespace-only noise is not a letter either
+        assert grade_task("mc", payload, "ab1") == (False, "right")
+
+    def test_placement_unlocks_in_curriculum_order(self, client):
+        # A2 placement: exactly the 3 A1 missions become done, current = first A2 mission
+        r = client.post("/api/onboarding/placement", json={"correct": 3, "questions": 5})
+        assert r.status_code == 200 and r.json()["level"] == "A2"
+        tree = client.get("/api/path").json()["tree"]
+        flat = [m for lvl in tree for u in lvl["units"] for m in u["missions"]]
+        done = [m["id"] for m in flat if m["state"] == "done"]
+        current = next(m["id"] for m in flat if m["state"] == "current")
+        assert done == [m["id"] for m in flat[:3]]  # the whole first level
+        assert current == flat[3]["id"]  # the first mission of the placed level
+        assert tree[1]["cefr"] == "A2"
+
+    def test_b2_placement_lands_on_first_b2_mission(self, client):
+        r = client.post("/api/onboarding/placement", json={"correct": 5, "questions": 5})
+        assert r.json()["level"] == "B2"
+        tree = client.get("/api/path").json()["tree"]
+        flat = [m for lvl in tree for u in lvl["units"] for m in u["missions"]]
+        done_n = sum(1 for m in flat if m["state"] == "done")
+        current = next(m for m in flat if m["state"] == "current")
+        assert done_n == 9  # 3+3+3 of the preceding levels
+        b2_first = next(m for lvl in tree if lvl["cefr"] == "B2" for u in lvl["units"] for m in u["missions"])
+        assert current["id"] == b2_first["id"]
+
+    def test_complete_without_attempts_is_refused(self, client):
+        tree = client.get("/api/path").json()["tree"]
+        some_mission = next(m for lvl in tree for u in lvl["units"] for m in u["missions"])["id"]
+        r = client.post(f"/api/missions/{some_mission}/complete", json={"correct": 999, "total": 1000})
+        assert r.status_code == 400
+        assert "no attempts" in r.json()["detail"]

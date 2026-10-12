@@ -18,13 +18,17 @@ router = APIRouter()
 
 
 def _mission_rows(session: Session) -> list[Node]:
-    return session.exec(select_missions()).all()
+    """Missions in curriculum order (level → unit → position).
 
-
-def select_missions():
-    from sqlmodel import select
-
-    return select(Node).where(Node.kind == "mission").order_by(Node.parent_id, Node.position)
+    Must match the display order of /api/path: ordering by parent_id sorts by
+    random hex ids, which made placement unlock a scattered set of missions
+    and left `current` pointing at an A1 mission after a B2 placement.
+    """
+    out: list[Node] = []
+    for level in session.exec(_level_query()).all():
+        for unit in session.exec(_children_query(level.id)).all():
+            out.extend(session.exec(_children_query(unit.id)).all())
+    return out
 
 
 @router.get("/path")
@@ -90,7 +94,10 @@ class PlacementBody(BaseModel):
     questions: int = 5
 
 
-PLACEMENT_MAP = {"A1": 0, "A2": 3, "B1": 5, "B2": 8}
+# Missions to skip per placed level, counted in curriculum order over the
+# seeded skeleton (3+3+3+2): A2 skips all of A1, B1 skips A1+A2, B2 skips
+# A1+A2+B1 — so `current` lands on the first mission of the placed level.
+PLACEMENT_MAP = {"A1": 0, "A2": 3, "B1": 6, "B2": 9}
 
 
 @router.post("/onboarding/placement")
@@ -100,7 +107,7 @@ def placement(body: PlacementBody, session: Session = Depends(get_session)) -> d
     unlock = PLACEMENT_MAP[level]
     ids = [m.id for m in _mission_rows(session)][:unlock]
     profile_set(session, "level", level)
-    profile_set(session, "completed_ids", __import__("json").dumps(ids))
+    profile_set(session, "completed_ids", json.dumps(ids))
     profile_set(session, "onboarded", "1")
     session.commit()
     return {"level": level, "unlocked": len(ids)}
