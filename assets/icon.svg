@@ -1,26 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <!-- Verba app icon: a speech bubble holding the V of "Verba", with an AI
-       spark beside it — the tutor you talk to. Outline glyph in Verba's coral
-       on the warm near-black ground of the UI, Apple-style glyph on a
-       squircle. Gradients use userSpaceOnUse: objectBoundingBox gradients
-       silently fail on straight lines (zero-area bbox). -->
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#23211c"/>
-      <stop offset="1" stop-color="#151412"/>
-    </linearGradient>
-    <linearGradient id="stroke" x1="0" y1="196" x2="0" y2="820" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#e2906b"/>
-      <stop offset="1" stop-color="#d97757"/>
-    </linearGradient>
-  </defs>
-  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
-  <g fill="none" stroke="url(#stroke)" stroke-width="42" stroke-linecap="round" stroke-linejoin="round">
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="512"
+  height="512"
+  viewBox="0 0 256 256"
+  fill="none"
+  role="img"
+  aria-labelledby="icon-title icon-desc"
+>
+  <title id="icon-title">Verba — app icon</title>
+  <desc id="icon-desc">
+    Bolla di parlato con la V di Verba e scintilla AI, disegnati a contorni
+    nello stesso stile del marchio Marc'Antonio Lopez: line art su sfondo
+    trasparente, trattouniforme con cap tondi, scintilla in verde salvia.
+  </desc>
+
+  <g
+    fill="none"
+    stroke="#242629"
+    stroke-width="3.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
     <!-- speech bubble, tail bottom-left -->
-    <path d="M 336 296 H 688 Q 776 296 776 384 V 544 Q 776 632 688 632 H 480 L 302 772 L 390 632 H 336 Q 248 632 248 544 V 384 Q 248 296 336 296 Z"/>
+    <path
+      d="M72 56
+         H184
+         C197.25 56 208 66.75 208 80
+         V132
+         C208 145.25 197.25 156 184 156
+         H124
+         L72 200
+         L92 156
+         H72
+         C58.75 156 48 145.25 48 132
+         V80
+         C48 66.75 58.75 56 72 56Z"
+    />
+
     <!-- the V of Verba -->
-    <path d="M 392 380 L 512 552 L 632 380"/>
+    <path d="M96 84 L128 130 L160 84"/>
   </g>
-  <!-- AI spark -->
-  <path d="M 812 196 L 826 240 L 870 254 L 826 268 L 812 312 L 798 268 L 754 254 L 798 240 Z" fill="url(#stroke)"/>
+
+  <!-- Simbolo AI: solo contorno, verde salvia come nel marchio -->
+  <path
+    d="M200 26
+       C202 26 202 31 204 33
+       C206 35 211 35 211 37
+       C211 39 206 39 204 41
+       C202 43 202 48 200 48
+       C198 48 198 43 196 41
+       C194 39 189 39 189 37
+       C189 35 194 35 196 33
+       C198 31 198 26 200 26Z"
+    fill="none"
+    stroke="#829F68"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
 </svg>

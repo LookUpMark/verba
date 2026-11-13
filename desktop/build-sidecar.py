@@ -50,9 +50,12 @@ def main() -> int:
         str(HERE / "build"),
         "--specpath",
         str(HERE / "build"),
-        # The UI prototype rides inside the binary (served at / when frozen).
+        # The UI prototype rides inside the binary (served at / when frozen),
+        # with the self-hosted brand fonts next to it (served at /assets/fonts).
         "--add-data",
         f"{HERE.parent / 'index.html'}{sep}static",
+        "--add-data",
+        f"{HERE.parent / 'assets' / 'fonts'}{sep}static/assets/fonts",
         # The verba package must be importable (pip install -e .).
         "--paths",
         str(HERE.parent / "src"),
