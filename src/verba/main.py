@@ -143,12 +143,33 @@ _INDEX_CANDIDATES = (
 )
 _INDEX = next((p for p in _INDEX_CANDIDATES if p.is_file()), _INDEX_CANDIDATES[-1])
 
+# Self-hosted Inter (brand marcantonio-lopez) sits next to index.html with the
+# same frozen/dev split: PyInstaller bundles them under static/assets/fonts
+# (build-sidecar.py --add-data); dev/editable uses the repo assets/ folder.
+_FONT_BASES = (
+    Path(getattr(sys, "_MEIPASS", "")) / "static" / "assets" / "fonts",
+    Path(__file__).resolve().parents[2] / "assets" / "fonts",
+)
+
 
 @app.get("/")
 def root() -> Any:
     if _INDEX.exists():
         return FileResponse(_INDEX, media_type="text/html")
     return {"app": "Verba", "docs": "/docs"}
+
+
+@app.get("/assets/fonts/{name}")
+def brand_font(name: str) -> Any:
+    # Inter woff2 only, no traversal: the index.html @font-face URLs are the
+    # sole intended consumer.
+    if "/" in name or "\\" in name or not name.endswith(".woff2"):
+        raise HTTPException(status_code=404)
+    for base in _FONT_BASES:
+        candidate = base / name
+        if candidate.is_file():
+            return FileResponse(candidate, media_type="font/woff2")
+    raise HTTPException(status_code=404)
 
 
 @app.get("/api/health")
