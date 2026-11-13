@@ -270,6 +270,8 @@
   --elev-raised: rgba(0, 0, 0, 0.05) 0px 4px 24px;
   --focus-ring: 0 0 0 2px var(--accent);  /* brand posture: 2px accent ring */
   --ease-standard: var(--ease-out);
+  --motion-fast: var(--dur-fast);  /* 120ms */
+  --motion-base: var(--dur-base);  /* 200ms */
   /* Verba app spacing — kept on the 4/8 rhythm but pinned so component
      layout is unaffected by the site-scale rhythm of tokens.css. */
   --space-1: 4px;
@@ -711,7 +713,7 @@ kbd {
 .ob-progress { height: 8px; background: var(--surface-warm); border-radius: var(--radius-pill); overflow: hidden; flex: 1; }
 .ob-progress i { display: block; height: 100%; background: var(--accent); transition: width var(--motion-base) var(--ease-standard); }
 .ob-q { font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600; line-height: 1.3; margin: 0; }
-.ob-level { font-family: var(--font-display); font-size: var(--text-3xl); font-weight: 600; color: var(--accent); line-height: 1.1; margin: 0; }
+.ob-level { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--accent); line-height: 1.1; margin: 0; }
 .goal-cards { display: grid; gap: var(--space-3); }
 .goal-card-opt { text-align: left; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3); padding: var(--space-4) var(--space-5); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; box-shadow: var(--elev-ring); color: var(--fg); }
 .goal-card-opt:hover { border-color: var(--meta); }
